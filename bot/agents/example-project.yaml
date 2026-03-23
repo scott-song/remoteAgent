@@ -1,0 +1,42 @@
+# Example agent configuration
+# Copy this file and customize for your project.
+#
+# Each agent maps to:
+#   - One Rocket.Chat bot user (rc_username)
+#   - One project directory (project_dir)
+#   - One set of Claude Code settings (model, permissions, etc.)
+
+name: example-project
+display_name: "Example Project Bot"
+description: "Example agent for testing"
+
+# Project directory — where Claude Code will operate
+project_dir: /tmp/example-project
+
+# Claude model
+model: claude-sonnet-4-5-20250929
+
+# Permission mode: plan | default | acceptEdits
+permission_mode: acceptEdits
+
+# System prompt (optional — Claude Code default is used if omitted)
+# system_prompt: "You are an expert developer."
+
+# Setting sources — enables CLAUDE.md and skills loading
+setting_sources: [user, project]
+
+# Security
+restricted: true                     # lock file access to project_dir
+allowed_commands:                    # additional commands beyond the base set
+  - npm
+  - node
+  - npx
+
+# MCP servers (optional — merged with project's ~/.claude.json config)
+# mcp_servers:
+#   playwright:
+#     command: npx
+#     args: ["@anthropic/playwright-mcp-server"]
+
+# Rocket.Chat bot username (must be created in RC admin panel)
+rc_username: bot.example

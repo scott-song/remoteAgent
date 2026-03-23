@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo:*)",
+      "WebSearch",
+      "WebFetch(domain:developer.rocket.chat)",
+      "WebFetch(domain:rocketchat.github.io)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

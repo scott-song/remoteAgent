@@ -1,0 +1,22 @@
+[project]
+name = "claude-workspace-bot"
+version = "0.1.0"
+description = "Claude Code bot service for Rocket.Chat"
+requires-python = ">=3.10"
+dependencies = [
+    "websocket-client>=1.7.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "claude-agent-sdk>=0.1.47",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
