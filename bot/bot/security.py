@@ -1,52 +1,40 @@
 """
-Security Hooks
-==============
-Pre-tool-use hooks that validate bash commands.
-Allowlist approach — only explicitly permitted commands can run.
+Security hooks — bash command allowlist and path restriction.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from typing import Optional
 
-# Base allowed commands (always available)
 BASE_ALLOWED_COMMANDS = {
-    # File inspection
     "ls", "cat", "head", "tail", "wc", "grep", "echo", "printf",
-    # File operations
     "cp", "mv", "rm", "mkdir", "touch", "chmod",
-    # Directory
     "pwd", "cd",
-    # Node.js
     "npm", "pnpm", "npx", "node",
-    # Python
     "python", "python3",
-    # Version control
     "git", "gh",
-    # Process
     "ps", "lsof", "sleep", "find", "pkill", "kill",
-    # Shell utilities
     "true", "false", "test", "[", "which", "export", "env",
     "readlink", "basename", "dirname",
-    # Text processing
     "sed", "awk", "sort", "uniq", "tr", "cut", "tee",
-    # Network
-    "curl",
-    # Other
-    "xargs", "date",
+    "curl", "xargs", "date",
 }
+
+_SEMICOLON_RE = re.compile(r'(?<!\\)(?<!["\'])\s*;\s*(?!["\'])')
+
+_SHELL_KEYWORDS = frozenset({
+    "if", "then", "else", "elif", "fi", "for", "while",
+    "until", "do", "done", "case", "esac", "in", "!", "{", "}",
+})
 
 
 def extract_commands(command_string: str) -> list[str]:
     """Extract command names from a shell command string."""
-    import re
-
     commands = []
-    segments = re.split(r'(?<!\\)(?<!["\'])\s*;\s*(?!["\'])', command_string)
-
-    for segment in segments:
+    for segment in _SEMICOLON_RE.split(command_string):
         segment = segment.strip()
         if not segment:
             continue
@@ -54,7 +42,6 @@ def extract_commands(command_string: str) -> list[str]:
             tokens = shlex.split(segment)
         except ValueError:
             return []
-
         if not tokens:
             continue
 
@@ -66,26 +53,19 @@ def extract_commands(command_string: str) -> list[str]:
                 if token in (";", "\\;", "+"):
                     in_find_exec = False
                 continue
-
             if token in ("|", "||", "&&", "&"):
                 expect_command = True
                 continue
-
-            if token in ("if", "then", "else", "elif", "fi", "for", "while",
-                         "until", "do", "done", "case", "esac", "in", "!", "{", "}"):
+            if token in _SHELL_KEYWORDS:
                 continue
-
             if token.startswith("-"):
                 if token in ("-exec", "-execdir"):
                     in_find_exec = True
                 continue
-
             if "=" in token and not token.startswith("="):
                 continue
-
             if expect_command:
-                cmd = os.path.basename(token)
-                commands.append(cmd)
+                commands.append(os.path.basename(token))
                 expect_command = False
 
     return commands
@@ -95,13 +75,7 @@ def make_bash_security_hook(
     allowed_commands: set[str],
     restricted_project_dir: Optional[str] = None,
 ):
-    """
-    Factory for bash security hooks.
-
-    Args:
-        allowed_commands: Set of allowed command names (BASE + agent-specific)
-        restricted_project_dir: If set, all path args must stay within this dir
-    """
+    """Create a PreToolUse hook that validates bash commands against an allowlist."""
 
     async def _hook(input_data, tool_use_id=None, context=None):
         if input_data.get("tool_name") != "Bash":
@@ -113,17 +87,11 @@ def make_bash_security_hook(
 
         commands = extract_commands(command)
         if not commands:
-            return {
-                "decision": "block",
-                "reason": f"Could not parse command: {command}",
-            }
+            return {"decision": "block", "reason": f"Could not parse command: {command}"}
 
         for cmd in commands:
             if cmd not in allowed_commands:
-                return {
-                    "decision": "block",
-                    "reason": f"Command '{cmd}' is not allowed",
-                }
+                return {"decision": "block", "reason": f"Command '{cmd}' is not allowed"}
 
         if restricted_project_dir:
             ok, reason = _validate_paths(command, restricted_project_dir)
@@ -135,6 +103,9 @@ def make_bash_security_hook(
     return _hook
 
 
+_ALLOWED_PATH_PREFIXES = ("/tmp/", "/var/tmp/", "/private/tmp/", "/dev/")
+
+
 def _validate_paths(command_string: str, project_dir: str) -> tuple[bool, str]:
     """Validate that path-like arguments stay within project_dir."""
     try:
@@ -142,38 +113,20 @@ def _validate_paths(command_string: str, project_dir: str) -> tuple[bool, str]:
     except ValueError:
         return False, "Could not parse command for path validation"
 
-    project_dir_normalized = os.path.realpath(project_dir)
-    if not project_dir_normalized.endswith("/"):
-        project_dir_normalized += "/"
-
-    allowed_prefixes = ("/tmp/", "/var/tmp/", "/private/tmp/", "/dev/")
+    project_dir_normalized = os.path.realpath(project_dir).rstrip("/") + "/"
 
     for token in tokens:
         if token.startswith("-") or ("=" in token and not token.startswith("=")):
             continue
 
-        is_path = (
-            token.startswith("/")
-            or token.startswith("./")
-            or token.startswith("../")
-            or ".." in token
-        )
+        is_path = token.startswith("/") or token.startswith("./") or token.startswith("../") or ".." in token
         if not is_path:
             continue
-
-        # Allow /tmp, /dev, etc.
-        if any(token.startswith(p) for p in allowed_prefixes):
+        if any(token.startswith(p) for p in _ALLOWED_PATH_PREFIXES):
             continue
 
-        # Resolve and check
-        if os.path.isabs(token):
-            resolved = os.path.realpath(token)
-        else:
-            resolved = os.path.realpath(os.path.join(project_dir, token))
-
-        if resolved == project_dir_normalized.rstrip("/"):
-            continue
-        if resolved.startswith(project_dir_normalized):
+        resolved = os.path.realpath(token if os.path.isabs(token) else os.path.join(project_dir, token))
+        if resolved == project_dir_normalized.rstrip("/") or resolved.startswith(project_dir_normalized):
             continue
 
         return False, f"Path '{token}' resolves outside project directory"

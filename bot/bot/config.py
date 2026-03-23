@@ -1,37 +1,25 @@
 """
-Configuration
-=============
-Loads settings from environment variables.
+Configuration — loads settings from environment variables.
 """
 
+from __future__ import annotations
+
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from project root
-load_dotenv(Path(__file__).parent.parent.parent / ".env")
+load_dotenv(Path(__file__).parents[2] / ".env")
 
 
 @dataclass
 class Settings:
-    # Rocket.Chat connection
-    rc_url: str = os.getenv("RC_URL", "http://localhost:3000")
-    rc_bot_password: str = os.getenv("RC_BOT_PASSWORD", "")
-
-    # Paths
+    feishu_app_id: str = os.getenv("FEISHU_APP_ID", "")
+    feishu_app_secret: str = os.getenv("FEISHU_APP_SECRET", "")
     agents_dir: Path = Path(__file__).parent.parent / "agents"
-
-    # Session management
     session_timeout_hours: int = int(os.getenv("SESSION_TIMEOUT_HOURS", "50"))
-
-    # Streaming
     stream_update_interval: float = float(os.getenv("STREAM_UPDATE_INTERVAL", "1.5"))
-
-    @property
-    def rc_ws_url(self) -> str:
-        return self.rc_url.replace("http", "ws") + "/websocket"
 
 
 settings = Settings()

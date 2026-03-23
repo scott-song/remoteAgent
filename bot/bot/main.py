@@ -1,169 +1,424 @@
 """
-Main Entry Point
-=================
-Wires together: RC clients (one per bot) → session manager → Claude SDK.
+Feishu bot service — routes messages to Claude sessions, streams responses.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
+import traceback
 import threading
 import time
 
 from .agent_registry import AgentRegistry
 from .config import settings
-from .rc_client import RCClient
+from .feishu_client import FeishuClient
+from .git_sync import sync_repo
 from .sdk_client import create_claude_client
 from .session_manager import Session, SessionManager
 from .stream_handler import StreamHandler
 
+MODE_ALIASES = {"plan": "plan", "ask": "default", "auto": "acceptEdits"}
+MODE_DISPLAY = {v: k for k, v in MODE_ALIASES.items()}
+NO_PROJECT_MSG = "No project selected.\nUse `/bind <name>` or `/project <name>` first."
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+_GREETINGS = {"hello", "hi", "hey", "help", "start", "你好"}
+
+HELP_TEXT = (
+    "**Commands:**\n\n"
+    "`/project <name>` — switch project\n"
+    "`/projects` — list all projects\n"
+    "`/mode [plan|auto|ask]` — switch mode\n"
+    "`/skills` — list skills\n"
+    "`/skill <name>` — invoke a skill\n"
+    "`/resume [id|number]` — resume a session\n"
+    "`/new` — fresh conversation\n"
+    "`/stop` — interrupt request\n"
+    "`/status` — check status\n"
+    "`/addproject <name> <path>` — add project\n"
+    "`/removeproject <name>` — remove project\n"
+    "`/bind <name>` — bind chat to project\n"
+    "`/unbind` — unbind chat\n"
+    "`/help` — this message\n\n"
+    "Or just send a message to chat with Claude."
+)
+
 
 class ClaudeWorkspaceBot:
-    """
-    Main bot service.
-
-    Creates one RCClient per agent (bot user).
-    Routes incoming messages to Claude sessions.
-    Streams responses back to Rocket.Chat.
-    """
-
     def __init__(self):
         self.agents = AgentRegistry(agents_dir=settings.agents_dir)
         self.sessions = SessionManager()
-
-        # One RC client per bot user
-        self.rc_clients: dict[str, RCClient] = {}
-
-        # Asyncio loop for Claude SDK calls (runs in background thread)
+        self.feishu = FeishuClient(app_id=settings.feishu_app_id, app_secret=settings.feishu_app_secret)
+        self.feishu.on_message(self._on_message)
+        self._user_agents: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
+    def _schedule(self, coro):
+        asyncio.run_coroutine_threadsafe(coro, self.loop)
+
     def start(self):
-        """Login all bot users and connect WebSockets."""
-        if not self.agents.list_agents():
+        agents = self.agents.list_agents()
+        if not agents:
             print("\nNo agents configured. Add YAML files to bot/agents/")
-            print("See bot/agents/example-project.yaml for reference.")
             return
-
-        print(f"\nStarting bot service...")
-        print(f"  RC server: {settings.rc_url}")
-        print(f"  Agents: {len(self.agents.list_agents())}")
-        print()
-
-        for agent in self.agents.list_agents():
-            try:
-                rc = RCClient(
-                    server_url=settings.rc_url,
-                    username=agent.rc_username,
-                    password=settings.rc_bot_password,
-                )
-                rc.login()
-                rc.on_message(
-                    lambda room_id, sender_id, sender_username, text, _agent=agent, _rc=rc:
-                        self._on_message(_rc, _agent.name, room_id, sender_id, sender_username, text)
-                )
-                rc.connect_ws()
-                self.rc_clients[agent.name] = rc
-            except Exception as e:
-                print(f"  [Error] Failed to start bot for {agent.name}: {e}")
-
-        print(f"\nAll bots connected. Listening for messages.\n")
-
-        # Keep main thread alive
+        print(f"\nClaude Workspace Bot")
+        print(f"  Feishu app: {settings.feishu_app_id[:8]}...")
+        print(f"  Projects: {', '.join(a.name for a in agents)}")
+        print(f"  Default: {agents[0].name} → {agents[0].project_dir}\n")
+        self.feishu.start(self.loop)
+        print("Listening for messages. Press Ctrl+C to stop.\n")
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nShutting down...")
-            self._shutdown()
+            for s in self.sessions.all_sessions():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.sessions.close(s.user_id, s.bot_name), self.loop
+                    ).result(timeout=5)
+                except Exception:
+                    pass
 
-    def _on_message(
-        self,
-        rc: RCClient,
-        agent_name: str,
-        room_id: str,
-        sender_id: str,
-        sender_username: str,
-        text: str,
-    ):
-        """Handle incoming message from a specific bot's channel."""
-        print(f"\n[{agent_name}] {sender_username}: {text}")
+    # ── Message routing ──────────────────────────────────
 
-        # Dispatch to asyncio loop
-        asyncio.run_coroutine_threadsafe(
-            self._handle_message(rc, agent_name, room_id, sender_id, text),
-            self.loop,
-        )
+    def _on_message(self, chat_id: str, sender_id: str, _sender_name: str, text: str, message_id: str):
+        print(f"\n[Message] {sender_id[:8]}...: {text}")
 
-    async def _handle_message(
-        self,
-        rc: RCClient,
-        agent_name: str,
-        room_id: str,
-        user_id: str,
-        text: str,
-    ):
-        """Route message to Claude session and stream response."""
-        agent = self.agents.get(agent_name)
+        if text.startswith("/"):
+            self._handle_command(text, chat_id, sender_id, message_id)
+        elif text.lower().strip() in _GREETINGS:
+            self.feishu.reply(message_id, HELP_TEXT)
+        else:
+            self.feishu.reply(message_id, "⏳ Processing...")
+            self._schedule(self._handle_prompt(text, chat_id, sender_id, message_id))
+
+    def _handle_command(self, text: str, chat_id: str, sender_id: str, message_id: str):
+        parts = text.split(None, 2)
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) >= 2 else None
+
+        commands = {
+            "/help": lambda: self.feishu.reply(message_id, HELP_TEXT),
+            "/projects": lambda: self._cmd_projects(sender_id, chat_id, message_id),
+            "/project": lambda: self._cmd_project(arg, sender_id, chat_id, message_id),
+            "/mode": lambda: self._cmd_mode(arg, sender_id, chat_id, message_id),
+            "/new": lambda: self._schedule(self._cmd_new(sender_id, chat_id, message_id)),
+            "/stop": lambda: self._schedule(self._cmd_stop(sender_id, chat_id, message_id)),
+            "/status": lambda: self._cmd_status(sender_id, chat_id, message_id),
+            "/skills": lambda: self._cmd_skills(sender_id, chat_id, message_id),
+            "/skill": lambda: self._cmd_skill(arg, sender_id, chat_id, message_id),
+            "/resume": lambda: self._cmd_resume(arg, sender_id, chat_id, message_id),
+            "/addproject": lambda: self._cmd_add_project(text, chat_id, message_id),
+            "/removeproject": lambda: self._cmd_remove_project(arg, message_id),
+            "/bind": lambda: self._cmd_bind(arg, chat_id, message_id),
+            "/unbind": lambda: self._cmd_unbind(chat_id, message_id),
+        }
+
+        handler = commands.get(cmd)
+        if handler:
+            handler()
+        else:
+            self.feishu.reply(message_id, f"Unknown command: `{cmd}`\nType /help for available commands.")
+
+    # ── Agent resolution ─────────────────────────────────
+
+    def _resolve_agent(self, sender_id: str, chat_id: str) -> str:
+        agent = self.agents.get_by_chat_id(chat_id)
+        if agent:
+            return agent.name
+        name = self._user_agents.get(sender_id)
+        if name and self.agents.get(name):
+            return name
+        agents = self.agents.list_agents()
+        return agents[0].name if agents else ""
+
+    # ── Chat commands ────────────────────────────────────
+
+    def _cmd_projects(self, sender_id: str, chat_id: str, message_id: str):
+        agents = self.agents.list_agents()
+        if not agents:
+            self.feishu.reply(message_id, "No projects.\nUse `/addproject <name> <path>` to add one.")
+            return
+        current = self._resolve_agent(sender_id, chat_id)
+        lines = ["**Projects:**\n"]
+        for a in agents:
+            marker = " ◀" if a.name == current else ""
+            lines.append(f"`{a.name}` — `{a.project_dir}` ({a.model}){marker}")
+        self.feishu.reply(message_id, "\n".join(lines))
+
+    def _cmd_project(self, name: str | None, sender_id: str, chat_id: str, message_id: str):
+        if name is None:
+            self._cmd_projects(sender_id, chat_id, message_id)
+            return
+        agent = self.agents.get(name)
         if not agent:
-            rc.send_message(room_id, f"Agent '{agent_name}' not found.")
+            names = ", ".join(a.name for a in self.agents.list_agents())
+            self.feishu.reply(message_id, f"Unknown project: `{name}`\nAvailable: {names}")
+            return
+        self._user_agents[sender_id] = name
+        self.feishu.reply(message_id, f"Switched to **{name}** (`{agent.project_dir}`)")
+
+    def _cmd_mode(self, mode: str | None, sender_id: str, chat_id: str, message_id: str):
+        if mode is None or mode not in MODE_ALIASES:
+            self.feishu.reply(message_id, "Usage: `/mode [plan|auto|ask]`")
+            return
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        session = self.sessions.get(sender_id, agent_name)
+        if not session:
+            self.feishu.reply(message_id, "No active session. Send a message first.")
+            return
+        self._schedule(self._switch_mode(session, MODE_ALIASES[mode], mode, chat_id))
+
+    async def _switch_mode(self, session: Session, sdk_mode: str, display: str, chat_id: str):
+        try:
+            await session.client.set_permission_mode(sdk_mode)
+            session.permission_mode = sdk_mode
+            self.feishu.send_message(chat_id, f"Mode switched to **{display}**")
+        except Exception as e:
+            self.feishu.send_message(chat_id, f"Failed to switch mode: {e}")
+
+    async def _cmd_new(self, sender_id: str, chat_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        await self.sessions.close(sender_id, agent_name)
+        self.feishu.reply(message_id, "Session reset.")
+
+    async def _cmd_stop(self, sender_id: str, chat_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        session = self.sessions.get(sender_id, agent_name)
+        if not session:
+            self.feishu.reply(message_id, "No active session.")
+            return
+        if not session.lock.locked():
+            self.feishu.reply(message_id, "Nothing running.")
+            return
+        try:
+            session.client.interrupt()
+            self.feishu.reply(message_id, "Interrupted.")
+        except Exception as e:
+            self.feishu.reply(message_id, f"Interrupt failed: {e}")
+
+    def _cmd_status(self, sender_id: str, chat_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        session = self.sessions.get(sender_id, agent_name)
+        if not session:
+            self.feishu.reply(message_id, "No active session.")
+            return
+        mode = MODE_DISPLAY.get(session.permission_mode, session.permission_mode)
+        status = "⏳ Working..." if session.lock.locked() else "Idle."
+        self.feishu.reply(message_id, f"{status} ({mode} mode)")
+
+    def _cmd_skills(self, sender_id: str, chat_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        if not agent_name:
+            self.feishu.reply(message_id, NO_PROJECT_MSG)
+            return
+        agent = self.agents.get(agent_name)
+        skills_dir = agent.project_dir / ".claude" / "skills"
+        skills = []
+        if skills_dir.exists():
+            for f in sorted(skills_dir.glob("*/SKILL.md")):
+                skills.append((f.parent.name, _read_first_line(f)))
+            for f in sorted(skills_dir.glob("*.md")):
+                if f.name != "SKILL.md":
+                    skills.append((f.stem, _read_first_line(f)))
+        if not skills:
+            self.feishu.reply(message_id, f"**{agent_name}** has no skills.\nAdd: `{skills_dir}/<name>/SKILL.md`")
+            return
+        lines = [f"**Skills for {agent_name}:**\n"]
+        for name, desc in skills:
+            lines.append(f"`{name}` — {desc}" if desc else f"`{name}`")
+        lines.append("\nInvoke: `/skill <name>`")
+        self.feishu.reply(message_id, "\n".join(lines))
+
+    def _cmd_skill(self, name: str | None, sender_id: str, chat_id: str, message_id: str):
+        if not name:
+            self._cmd_skills(sender_id, chat_id, message_id)
+            return
+        if not self._resolve_agent(sender_id, chat_id):
+            self.feishu.reply(message_id, NO_PROJECT_MSG)
+            return
+        self.feishu.reply(message_id, "⏳ Processing...")
+        self._schedule(self._handle_prompt(f"Invoke the skill: {name}", chat_id, sender_id, message_id))
+
+    # ── Resume ───────────────────────────────────────────
+
+    def _cmd_resume(self, arg: str | None, sender_id: str, chat_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        if not agent_name:
+            self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
 
-        # Cleanup stale sessions opportunistically
-        await self.sessions.cleanup_stale()
-
-        # Get or create Claude session
-        session = self.sessions.get(user_id, agent_name)
-        if not session:
-            session = await self._create_session(user_id, agent_name, agent)
-            if not session:
-                rc.send_message(room_id, "Failed to create Claude session.")
+        if arg is None:
+            # List recent sessions
+            history = self.sessions.get_history(agent_name)
+            if not history:
+                self.feishu.reply(message_id, f"No recent sessions for `{agent_name}`.\nPaste a session ID: `/resume <uuid>`")
                 return
+            lines = [f"**Recent sessions for {agent_name}:**\n"]
+            for i, entry in enumerate(history, 1):
+                ts = entry.get("last_active", "?")[:16].replace("T", " ")
+                summary = entry.get("summary", "?")
+                lines.append(f"`{i}.` [{ts}] {summary}")
+            lines.append(f"\nResume: `/resume <number>` or `/resume <uuid>`")
+            self.feishu.reply(message_id, "\n".join(lines))
+            return
 
-        # Process with lock (serialize messages per session)
-        async with session.lock:
-            await self._execute_and_stream(rc, session, room_id, text)
+        # Resolve session_id: either a number (index) or a UUID
+        session_id = None
+        if arg.isdigit():
+            idx = int(arg) - 1
+            history = self.sessions.get_history(agent_name)
+            if 0 <= idx < len(history):
+                session_id = history[idx]["session_id"]
+            else:
+                self.feishu.reply(message_id, f"Invalid number. Use 1-{len(history)}.")
+                return
+        elif _UUID_RE.match(arg):
+            session_id = arg
+        else:
+            self.feishu.reply(message_id, "Usage: `/resume <number>` or `/resume <session-uuid>`")
+            return
 
-    async def _create_session(self, user_id: str, agent_name: str, agent) -> Session | None:
-        """Create a new Claude session for a user-bot pair."""
+        self.feishu.reply(message_id, f"⏳ Resuming session `{session_id[:8]}...`")
+        self._schedule(self._do_resume(sender_id, agent_name, session_id, chat_id))
+
+    async def _do_resume(self, sender_id: str, agent_name: str, session_id: str, chat_id: str):
+        agent = self.agents.get(agent_name)
+        if not agent:
+            self.feishu.send_message(chat_id, f"Project `{agent_name}` not found.")
+            return
+
+        await self.sessions.close(sender_id, agent_name)
+
+        # Sync git repo if configured
+        if agent.github_url:
+            try:
+                status = sync_repo(agent.project_dir, agent.github_url)
+                print(f"  [Git] {agent_name}: {status}")
+            except Exception as e:
+                print(f"  [Git] {agent_name}: sync failed: {e}")
+
         try:
-            client = create_claude_client(agent)
+            client = create_claude_client(agent, resume=session_id)
             session = Session(
-                user_id=user_id,
-                bot_name=agent_name,
-                agent_config=agent,
-                client=client,
-                permission_mode=agent.permission_mode,
+                user_id=sender_id, bot_name=agent_name, agent_config=agent,
+                client=client, permission_mode=agent.permission_mode,
+                session_id=session_id,
             )
             await client.connect()
             session.connected = True
             self.sessions.store(session)
-            print(f"  [Session] Created {session.key}")
-            return session
+            self.feishu.send_message(chat_id, f"**Session resumed** (`{session_id[:8]}...`)\nProject: `{agent_name}`\n\nYou can continue the conversation.")
         except Exception as e:
-            print(f"  [Session] Failed to create for {user_id}:{agent_name}: {e}")
-            return None
+            print(f"  [Resume] Failed: {e}")
+            traceback.print_exc()
+            self.feishu.send_message(chat_id, f"Failed to resume: {e}")
 
-    async def _execute_and_stream(
-        self,
-        rc: RCClient,
-        session: Session,
-        room_id: str,
-        text: str,
-    ):
-        """Send prompt to Claude and stream response back to RC."""
-        start_time = time.time()
+    # ── Project management ───────────────────────────────
 
-        # Create placeholder message
-        msg_id = rc.send_message(room_id, "⏳ Thinking...")
+    def _cmd_add_project(self, text: str, chat_id: str, message_id: str):
+        # /addproject <name> <path> [--github <url>] [--bind]
+        parts = text.split()
+        if len(parts) < 3:
+            self.feishu.reply(message_id,
+                "Usage: `/addproject <name> <path>`\n"
+                "Options: `--bind` `--github <url>`\n"
+                "Example: `/addproject my-app /home/dev/my-app --github https://github.com/user/repo --bind`")
+            return
+        name, path = parts[1], parts[2]
+        bind = "--bind" in parts
+        github_url = None
+        if "--github" in parts:
+            idx = parts.index("--github")
+            if idx + 1 < len(parts):
+                github_url = parts[idx + 1]
 
-        streamer = StreamHandler(
-            rc=rc,
-            room_id=room_id,
-            msg_id=msg_id,
-            agent_name=session.bot_name,
-            interval=settings.stream_update_interval,
-        )
+        try:
+            agent = self.agents.add(name=name, project_dir=path, chat_id=chat_id if bind else None, github_url=github_url)
+            msg = f"**Added:** `{name}` → `{path}`"
+            if github_url:
+                msg += f"\nGit: `{github_url}`"
+            if bind:
+                msg += "\nBound ✅"
+            self.feishu.reply(message_id, msg)
+        except (ValueError, Exception) as e:
+            self.feishu.reply(message_id, f"Error: {e}")
+
+    def _cmd_remove_project(self, name: str | None, message_id: str):
+        if not name:
+            self.feishu.reply(message_id, "Usage: `/removeproject <name>`")
+            return
+        self.feishu.reply(message_id, f"Removed `{name}`." if self.agents.remove(name) else f"Not found: `{name}`")
+
+    def _cmd_bind(self, name: str | None, chat_id: str, message_id: str):
+        if not name:
+            agent = self.agents.get_by_chat_id(chat_id)
+            if agent:
+                self.feishu.reply(message_id, f"Bound to `{agent.name}` (`{agent.project_dir}`)")
+            else:
+                names = ", ".join(f"`{a.name}`" for a in self.agents.list_agents())
+                self.feishu.reply(message_id, f"Not bound.\n`/bind <name>`\nAvailable: {names}")
+            return
+        try:
+            self.agents.bind_chat(name, chat_id)
+            agent = self.agents.get(name)
+            self.feishu.reply(message_id, f"Bound to **{name}** (`{agent.project_dir}`)")
+        except ValueError as e:
+            self.feishu.reply(message_id, f"Error: {e}")
+
+    def _cmd_unbind(self, chat_id: str, message_id: str):
+        name = self.agents.unbind_chat(chat_id)
+        self.feishu.reply(message_id, f"Unbound from `{name}`." if name else "Not bound.")
+
+    # ── Claude session handling ──────────────────────────
+
+    async def _handle_prompt(self, text: str, chat_id: str, sender_id: str, message_id: str):
+        agent_name = self._resolve_agent(sender_id, chat_id)
+        agent = self.agents.get(agent_name)
+        if not agent:
+            self.feishu.send_message(chat_id, "No project configured. Use `/projects`.")
+            return
+
+        await self.sessions.cleanup_stale()
+
+        session = self.sessions.get(sender_id, agent_name)
+        if not session:
+            # Sync git repo if configured
+            if agent.github_url:
+                try:
+                    status = sync_repo(agent.project_dir, agent.github_url)
+                    print(f"  [Git] {agent_name}: {status}")
+                except Exception as e:
+                    print(f"  [Git] {agent_name}: sync failed: {e}")
+
+            try:
+                client = create_claude_client(agent)
+                session = Session(user_id=sender_id, bot_name=agent_name, agent_config=agent,
+                                  client=client, permission_mode=agent.permission_mode)
+                await client.connect()
+                session.connected = True
+                self.sessions.store(session)
+                print(f"  [Session] Created {session.key}")
+            except Exception as e:
+                self.feishu.send_message(chat_id, f"Failed to create session: {e}")
+                return
+
+        # Record first prompt for session summary
+        if not session.first_prompt:
+            session.first_prompt = text[:50]
+
+        async with session.lock:
+            await self._stream_response(chat_id, session, text)
+
+    async def _stream_response(self, chat_id: str, session: Session, text: str):
+        start = time.time()
+        msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
+        if not msg_id:
+            return
+
+        streamer = StreamHandler(self.feishu, chat_id, msg_id, session.bot_name, settings.stream_update_interval)
 
         try:
             await session.client.query(text)
@@ -173,64 +428,57 @@ class ClaudeWorkspaceBot:
 
                 if msg_type == "AssistantMessage" and hasattr(msg, "content"):
                     for block in msg.content:
-                        block_type = type(block).__name__
-                        if block_type == "TextBlock" and hasattr(block, "text"):
+                        bt = type(block).__name__
+                        if bt == "TextBlock" and hasattr(block, "text"):
                             streamer.on_text(block.text)
-                        elif block_type == "ToolUseBlock" and hasattr(block, "name"):
-                            tool_input = getattr(block, "input", {}) or {}
-                            streamer.on_tool_start(block.name, tool_input)
+                            print(block.text, end="", flush=True)
+                        elif bt == "ToolUseBlock" and hasattr(block, "name"):
+                            streamer.on_tool_start(block.name, getattr(block, "input", {}) or {})
+                            print(f"\n[Tool: {block.name}]", flush=True)
 
                 elif msg_type == "UserMessage" and hasattr(msg, "content"):
                     for block in msg.content:
                         if type(block).__name__ == "ToolResultBlock":
-                            content = str(getattr(block, "content", ""))
-                            is_error = getattr(block, "is_error", False)
-                            streamer.on_tool_result(content, is_error)
+                            streamer.on_tool_result(str(getattr(block, "content", "")), getattr(block, "is_error", False))
 
                 elif msg_type == "SystemMessage":
                     if hasattr(msg, "data") and isinstance(msg.data, dict):
-                        sid = msg.data.get("session_id")
-                        if sid:
+                        if sid := msg.data.get("session_id"):
                             session.session_id = sid
-                        mode = msg.data.get("permission_mode")
-                        if mode:
+                        if mode := msg.data.get("permission_mode"):
                             session.permission_mode = mode
 
                 elif msg_type == "ResultMessage":
-                    result_sid = getattr(msg, "session_id", None)
-                    if result_sid:
-                        session.session_id = result_sid
+                    if sid := getattr(msg, "session_id", None):
+                        session.session_id = sid
                     break
 
-            duration = f"{time.time() - start_time:.0f}s"
-            streamer.finalize(duration, session.permission_mode, session.session_id)
+            # Persist session to history
+            self.sessions.save_to_history(session)
+
+            duration = f"{time.time() - start:.0f}s"
+            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode))
+            print(f"\n  [Done] {duration}")
 
         except Exception as e:
             print(f"  [Error] {session.key}: {e}")
-            rc.update_message(room_id, msg_id, f"❌ Error: {e}")
-            # Close broken session
+            traceback.print_exc()
+            self.feishu.update_message(msg_id, f"❌ Error: {e}")
             await self.sessions.close(session.user_id, session.bot_name)
 
-    def _shutdown(self):
-        """Clean shutdown — close all sessions."""
-        for session in list(self.sessions._sessions.values()):
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.sessions.close(session.user_id, session.bot_name),
-                    self.loop,
-                ).result(timeout=5)
-            except Exception:
-                pass
+
+def _read_first_line(path) -> str:
+    try:
+        return path.read_text().strip().split("\n")[0].lstrip("# ").strip()
+    except Exception:
+        return ""
 
 
 def main():
     print("=" * 50)
-    print("  Claude Workspace Bot Service")
+    print("  Claude Workspace Bot (Feishu)")
     print("=" * 50)
-    print()
-
-    bot = ClaudeWorkspaceBot()
-    bot.start()
+    ClaudeWorkspaceBot().start()
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 [project]
 name = "claude-workspace-bot"
 version = "0.1.0"
-description = "Claude Code bot service for Rocket.Chat"
+description = "Claude Code bot service for Feishu"
 requires-python = ">=3.10"
 dependencies = [
-    "websocket-client>=1.7.0",
+    "lark-oapi>=1.4.0",
     "requests>=2.31.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
