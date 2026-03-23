@@ -83,6 +83,7 @@ def create_claude_client(
         max_turns=1000,
         cwd=str(project_dir),
         setting_sources=agent.setting_sources,
+        env={"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"},
     )
 
     if agent.system_prompt:
