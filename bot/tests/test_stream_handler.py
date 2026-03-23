@@ -142,7 +142,9 @@ class TestRenderTool(unittest.TestCase):
 
 class TestStreamHandler(unittest.TestCase):
     def _make_handler(self, interval=1.5):
-        client = MagicMock(spec=["update_message"])
+        client = MagicMock(spec=["update_message", "send_message", "_chunk_text"])
+        # By default, _chunk_text returns text as single chunk
+        client._chunk_text.side_effect = lambda text: [text]
         handler = StreamHandler(
             client=client,
             chat_id="chat_1",
@@ -181,12 +183,16 @@ class TestStreamHandler(unittest.TestCase):
         self.assertEqual(h.tools[-1]["status"], "success")
         self.assertEqual(h.tools[-1]["output"], "output text")
 
-    def test_on_tool_result_truncates_to_2000(self):
+    def test_on_tool_result_truncates_to_2000_with_indicator(self):
         h, _ = self._make_handler()
         h._last_update = float("inf")
         h.on_tool_start("Bash", {"command": "ls"})
         h.on_tool_result("x" * 5000, is_error=False)
-        self.assertEqual(len(h.tools[-1]["output"]), 2000)
+        output = h.tools[-1]["output"]
+        # First 2000 chars preserved, then truncation indicator appended
+        self.assertTrue(output.startswith("x" * 2000))
+        self.assertIn("truncated", output)
+        self.assertIn("5000 chars total", output)
 
     def test_on_tool_result_empty_tools_no_crash(self):
         h, _ = self._make_handler()
@@ -230,6 +236,28 @@ class TestStreamHandler(unittest.TestCase):
         result = h._render_streaming()
         self.assertIn("Working...", result)
 
+    def test_render_streaming_truncates_long_response(self):
+        """Mid-stream text > 3000 chars is trimmed to tail with indicator."""
+        h, _ = self._make_handler()
+        h.response_text = "A" * 5000
+        result = h._render_streaming()
+        self.assertIn("response truncated", result)
+        # Should contain the tail portion
+        self.assertIn("A" * 3000, result)
+
+    def test_render_streaming_collapses_finished_tools(self):
+        """After first render, completed tools are summarized as a count."""
+        h, _ = self._make_handler()
+        h.tools.append({"name": "Read", "status": "success", "duration_ms": 5, "input": {}})
+        # First render — shows tool details
+        result1 = h._render_streaming()
+        self.assertIn("Read", result1)
+        # Second render — prior tools collapsed
+        h.tools.append({"name": "Bash", "status": "running", "input": {"command": "ls"}})
+        result2 = h._render_streaming()
+        self.assertIn("1 tool calls completed", result2)
+        self.assertIn("Bash", result2)
+
     # -- _render_final --
 
     def test_render_final_with_tools_has_separator(self):
@@ -248,6 +276,124 @@ class TestStreamHandler(unittest.TestCase):
         h, _ = self._make_handler()
         result = h._render_final("1s", "one-shot")
         self.assertIn("(no response)", result)
+
+
+    # -- finalize with chunking --
+
+    def test_finalize_sends_overflow_chunks(self):
+        """When finalize text is split into multiple chunks, overflow goes via send_message."""
+        h, client = self._make_handler()
+        h.response_text = "big response"
+        client._chunk_text.side_effect = lambda text: ["chunk1", "chunk2", "chunk3"]
+        h.finalize(duration_str="1s", mode="one-shot")
+        # First chunk goes to update_message
+        client.update_message.assert_called_once_with("msg_1", "chunk1")
+        # Overflow chunks go to send_message
+        assert client.send_message.call_count == 2
+        client.send_message.assert_any_call("chat_1", "chunk2")
+        client.send_message.assert_any_call("chat_1", "chunk3")
+
+    def test_finalize_single_chunk_no_send(self):
+        """Single chunk should only call update_message, not send_message."""
+        h, client = self._make_handler()
+        h.response_text = "small"
+        h.finalize(duration_str="1s", mode="one-shot")
+        client.update_message.assert_called_once()
+        client.send_message.assert_not_called()
+
+    # -- on_tool_result truncation details --
+
+    def test_on_tool_result_short_content_not_truncated(self):
+        h, _ = self._make_handler()
+        h._last_update = float("inf")
+        h.on_tool_start("Bash", {"command": "ls"})
+        h.on_tool_result("short output", is_error=False)
+        self.assertEqual(h.tools[-1]["output"], "short output")
+        self.assertNotIn("truncated", h.tools[-1]["output"])
+
+    def test_on_tool_result_exactly_2000_not_truncated(self):
+        h, _ = self._make_handler()
+        h._last_update = float("inf")
+        h.on_tool_start("Bash", {"command": "ls"})
+        h.on_tool_result("x" * 2000, is_error=False)
+        self.assertEqual(h.tools[-1]["output"], "x" * 2000)
+
+    def test_on_tool_result_2001_truncated(self):
+        h, _ = self._make_handler()
+        h._last_update = float("inf")
+        h.on_tool_start("Bash", {"command": "ls"})
+        h.on_tool_result("x" * 2001, is_error=False)
+        self.assertIn("truncated", h.tools[-1]["output"])
+        self.assertIn("2001 chars total", h.tools[-1]["output"])
+
+    def test_on_tool_result_records_duration_ms(self):
+        h, _ = self._make_handler()
+        h._last_update = float("inf")
+        h.on_tool_start("Bash", {"command": "ls"})
+        h.on_tool_result("ok", is_error=False)
+        self.assertIn("duration_ms", h.tools[-1])
+        self.assertIsInstance(h.tools[-1]["duration_ms"], int)
+
+    def test_on_tool_result_error_status(self):
+        h, _ = self._make_handler()
+        h._last_update = float("inf")
+        h.on_tool_start("Bash", {"command": "bad"})
+        h.on_tool_result("error msg", is_error=True)
+        self.assertEqual(h.tools[-1]["status"], "error")
+
+
+# ---------------------------------------------------------------------------
+# _render_tool — error output display
+# ---------------------------------------------------------------------------
+
+class TestRenderToolErrorOutput(unittest.TestCase):
+    def test_error_tool_shows_output(self):
+        tool = {"name": "Bash", "status": "error", "duration_ms": 50,
+                "input": {"command": "exit 1"}, "output": "command failed"}
+        result = _render_tool(tool)
+        self.assertIn("command failed", result)
+
+    def test_success_tool_hides_output(self):
+        tool = {"name": "Bash", "status": "success", "duration_ms": 50,
+                "input": {"command": "ls"}, "output": "file1\nfile2"}
+        result = _render_tool(tool)
+        self.assertNotIn("file1", result)
+
+    def test_error_output_truncated_at_500(self):
+        tool = {"name": "Bash", "status": "error", "duration_ms": 50,
+                "input": {}, "output": "E" * 1000}
+        result = _render_tool(tool)
+        # Error output shown but capped at 500 chars
+        self.assertIn("E" * 500, result)
+        # The 501st char should not appear in the output quote
+        lines_with_output = [l for l in result.split("\n") if l.startswith(">")]
+        combined = "".join(lines_with_output)
+        self.assertLessEqual(len(combined), 510)  # "> " prefix + 500 chars
+
+
+# ---------------------------------------------------------------------------
+# _summarize_input — edit preview limit
+# ---------------------------------------------------------------------------
+
+class TestEditPreviewLimit(unittest.TestCase):
+    def test_edit_old_string_truncated_at_200(self):
+        result = _summarize_input("Edit", {
+            "file_path": "/a.py",
+            "old_string": "O" * 500,
+            "new_string": "N" * 500,
+        })
+        # old_string should be truncated to 200 chars
+        self.assertIn("O" * 200, result)
+        self.assertNotIn("O" * 201, result)
+
+    def test_edit_new_string_truncated_at_200(self):
+        result = _summarize_input("Edit", {
+            "file_path": "/a.py",
+            "old_string": "old",
+            "new_string": "N" * 500,
+        })
+        self.assertIn("N" * 200, result)
+        self.assertNotIn("N" * 201, result)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ from typing import Optional
 
 from .feishu_client import FeishuClient
 
+TOOL_OUTPUT_MAX_CHARS = 2000
+EDIT_PREVIEW_MAX_CHARS = 200
+
 
 class StreamHandler:
     def __init__(self, client: FeishuClient, chat_id: str, msg_id: str, agent_name: str, interval: float = 1.5):
@@ -34,12 +37,21 @@ class StreamHandler:
         if self.tools:
             tool = self.tools[-1]
             tool["status"] = "error" if is_error else "success"
-            tool["output"] = content[:2000]
+            if len(content) > TOOL_OUTPUT_MAX_CHARS:
+                tool["output"] = content[:TOOL_OUTPUT_MAX_CHARS] + f"\n... (truncated, {len(content)} chars total)"
+            else:
+                tool["output"] = content
             tool["duration_ms"] = int((time.time() - tool.get("started_at", time.time())) * 1000)
         self._maybe_update()
 
     def finalize(self, duration_str: str, mode: str, session_id: Optional[str] = None):
-        self.client.update_message(self.msg_id, self._render_final(duration_str, mode))
+        final_text = self._render_final(duration_str, mode)
+        chunks = self.client._chunk_text(final_text)
+        # Update original message with first chunk
+        self.client.update_message(self.msg_id, chunks[0] if len(chunks) > 1 else final_text)
+        # Send overflow chunks as separate messages
+        for chunk in chunks[1:]:
+            self.client.send_message(self.chat_id, chunk)
 
     def _maybe_update(self):
         now = time.time()
@@ -49,10 +61,27 @@ class StreamHandler:
         self._last_update = now
 
     def _render_streaming(self) -> str:
-        parts = [_render_tool(t) for t in self.tools]
+        # Only render recently completed tools + current running tool to keep size bounded
+        # Already-rendered tools are summarized as a count
+        finished = [t for t in self.tools if t["status"] != "running"]
+        running = [t for t in self.tools if t["status"] == "running"]
+        parts: list[str] = []
+        if self._tools_rendered_count > 0:
+            parts.append(f"*({self._tools_rendered_count} tool calls completed)*")
+        # Show tools that completed since last render + any running
+        new_finished = finished[self._tools_rendered_count:]
+        for t in new_finished:
+            parts.append(_render_tool(t))
+        for t in running:
+            parts.append(_render_tool(t))
         if self.response_text:
-            parts.append(self.response_text)
+            # Show tail of response to keep within card limits
+            tail = self.response_text[-3000:] if len(self.response_text) > 3000 else self.response_text
+            if tail != self.response_text:
+                parts.append("*(response truncated — full text will appear when complete)*")
+            parts.append(tail)
         parts.append("\n⏳ Working...")
+        self._tools_rendered_count = len(finished)
         return "\n".join(parts)
 
     def _render_final(self, duration_str: str, mode: str) -> str:
@@ -75,6 +104,8 @@ def _render_tool(tool: dict) -> str:
     summary = _summarize_input(name, tool.get("input", {}))
     if summary:
         line += f"\n```\n{summary}\n```"
+    if tool.get("output") and status == "error":
+        line += f"\n> {tool['output'][:500]}"
     return line
 
 
@@ -85,8 +116,8 @@ def _summarize_input(tool_name: str, tool_input: dict) -> str:
         return tool_input.get("file_path", tool_input.get("pattern", str(tool_input)))
     if tool_name == "Edit":
         path = tool_input.get("file_path", "")
-        old = str(tool_input.get("old_string", ""))[:60]
-        new = str(tool_input.get("new_string", ""))[:60]
+        old = str(tool_input.get("old_string", ""))[:EDIT_PREVIEW_MAX_CHARS]
+        new = str(tool_input.get("new_string", ""))[:EDIT_PREVIEW_MAX_CHARS]
         return f"{path}\n- {old}\n+ {new}" if old and new else path
     if tool_name == "Bash":
         return tool_input.get("command", str(tool_input))

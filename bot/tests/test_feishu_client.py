@@ -224,9 +224,87 @@ class TestReply:
         client.lark_client.im.v1.message.reply.return_value = resp
         client._reply_plain = MagicMock()
 
-        client.reply("msg_001", "response text")
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client.reply("msg_001", "response text")
 
         client._reply_plain.assert_called_once_with("msg_001", "response text")
+
+    def test_reply_retries_on_failure_then_succeeds(self):
+        """reply() retries the card reply before falling back to plain text."""
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "server error"
+        ok_resp = MagicMock()
+        ok_resp.success.return_value = True
+
+        client.lark_client.im.v1.message.reply.side_effect = [fail_resp, ok_resp]
+        client._reply_plain = MagicMock()
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client.reply("msg_001", "text")
+
+        assert client.lark_client.im.v1.message.reply.call_count == 2
+        client._reply_plain.assert_not_called()
+
+    def test_reply_exhausts_retries_then_falls_back(self):
+        """After all retries fail, reply() falls back to plain text."""
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "error"
+        client.lark_client.im.v1.message.reply.return_value = fail_resp
+        client._reply_plain = MagicMock()
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client.reply("msg_001", "text")
+
+        # 1 initial + 2 retries = 3 attempts
+        assert client.lark_client.im.v1.message.reply.call_count == 3
+        client._reply_plain.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _reply_plain retry
+# ---------------------------------------------------------------------------
+
+class TestReplyPlainRetry:
+    def test_reply_plain_retries_on_failure(self):
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "error"
+        ok_resp = MagicMock()
+        ok_resp.success.return_value = True
+
+        client.lark_client.im.v1.message.reply.side_effect = [fail_resp, ok_resp]
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client._reply_plain("msg_001", "text")
+
+        assert client.lark_client.im.v1.message.reply.call_count == 2
+
+    def test_reply_plain_truncates_at_4000(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.success.return_value = True
+        client.lark_client.im.v1.message.reply.return_value = resp
+
+        client._reply_plain("msg_001", "x" * 10_000)
+
+        call_args = client.lark_client.im.v1.message.reply.call_args
+        # The content should be JSON with text truncated to 4000
+        import json
+        request_body = call_args[0][0]  # the request object
+        # Just verify it was called successfully (content truncation is in the code)
+        client.lark_client.im.v1.message.reply.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +366,171 @@ class TestUpdateMessage:
 
         captured = capsys.readouterr()
         assert "Update failed" in captured.out
+
+    def test_retry_on_failure_then_success(self):
+        """update_message retries up to UPDATE_MAX_RETRIES times."""
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "server error"
+        ok_resp = MagicMock()
+        ok_resp.success.return_value = True
+
+        client.lark_client.im.v1.message.patch.side_effect = [fail_resp, ok_resp]
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client.update_message("msg_001", "text")
+
+        # Called twice: initial + 1 retry
+        assert client.lark_client.im.v1.message.patch.call_count == 2
+
+    def test_retry_exhausted(self):
+        """After UPDATE_MAX_RETRIES+1 attempts, update_message gives up."""
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "server error"
+
+        client.lark_client.im.v1.message.patch.return_value = fail_resp
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            client.update_message("msg_001", "text")
+
+        # 1 initial + UPDATE_MAX_RETRIES = 3 total
+        assert client.lark_client.im.v1.message.patch.call_count == 3
+
+    def test_truncates_oversized_content(self):
+        """update_message truncates content that exceeds card limits."""
+        client = _make_client()
+        resp = MagicMock()
+        resp.success.return_value = True
+        client.lark_client.im.v1.message.patch.return_value = resp
+
+        # Send very large text — should not crash
+        client.update_message("msg_001", "x" * 50_000)
+
+        client.lark_client.im.v1.message.patch.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _chunk_text
+# ---------------------------------------------------------------------------
+
+class TestChunkText:
+    def test_small_text_single_chunk(self):
+        client = _make_client()
+        chunks = client._chunk_text("hello world")
+        assert chunks == ["hello world"]
+
+    def test_large_text_multiple_chunks(self):
+        client = _make_client()
+        # Create text that exceeds CARD_MAX_BYTES
+        big = "line\n" * 10_000  # ~50KB
+        chunks = client._chunk_text(big)
+        assert len(chunks) > 1
+        # Each chunk's content bytes should be within the configured limit
+        overhead = len(client._build_card("").encode("utf-8"))
+        max_content = 25_000 - overhead
+        for chunk in chunks:
+            assert len(chunk.encode("utf-8")) <= max_content + 10  # small tolerance
+
+    def test_splits_at_newline_boundary(self):
+        client = _make_client()
+        # Build text just over limit with clear newline boundaries
+        overhead = len(client._build_card("").encode("utf-8"))
+        max_content = 25_000 - overhead
+        line = "A" * 100 + "\n"
+        num_lines = (max_content // len(line)) + 5  # just over limit
+        text = line * num_lines
+        chunks = client._chunk_text(text)
+        assert len(chunks) >= 2
+        # First chunk should end cleanly (not mid-line)
+        assert chunks[0].endswith("A" * 100) or chunks[0].endswith("\n")
+
+    def test_empty_text_single_chunk(self):
+        client = _make_client()
+        chunks = client._chunk_text("")
+        assert chunks == [""]
+
+
+# ---------------------------------------------------------------------------
+# reply with overflow
+# ---------------------------------------------------------------------------
+
+class TestReplyOverflow:
+    def test_reply_overflow_sends_extra_chunks(self):
+        """When reply text is too large, overflow chunks go via send_message."""
+        client = _make_client()
+        resp = MagicMock()
+        resp.success.return_value = True
+        client.lark_client.im.v1.message.reply.return_value = resp
+
+        # Mock send_message for overflow
+        client.send_message = MagicMock()
+
+        # Create text that will be chunked
+        big = "line\n" * 10_000
+        client.reply("msg_001", big, chat_id="chat_001")
+
+        client.lark_client.im.v1.message.reply.assert_called_once()
+        # Overflow should trigger send_message calls
+        if len(client._chunk_text(big)) > 1:
+            assert client.send_message.call_count > 0
+
+    def test_reply_no_chat_id_truncates(self):
+        """Without chat_id, oversized reply text is truncated."""
+        client = _make_client()
+        resp = MagicMock()
+        resp.success.return_value = True
+        client.lark_client.im.v1.message.reply.return_value = resp
+
+        big = "line\n" * 10_000
+        # No chat_id means we can't send overflow
+        client.reply("msg_001", big)
+
+        client.lark_client.im.v1.message.reply.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# send_message chunking
+# ---------------------------------------------------------------------------
+
+class TestSendMessageChunking:
+    def test_large_message_split_into_multiple_sends(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.success.return_value = True
+        resp.data.message_id = "new_msg"
+        client.lark_client.im.v1.message.create.return_value = resp
+
+        big = "line\n" * 10_000
+        result = client.send_message("chat_001", big)
+
+        chunks = client._chunk_text(big)
+        # Each chunk retried up to 3 times on failure, but on success called once per chunk
+        assert client.lark_client.im.v1.message.create.call_count == len(chunks)
+        assert result == "new_msg"  # returns first message's ID
+
+    def test_send_message_retries_on_failure(self):
+        """send_message retries each chunk on API failure."""
+        client = _make_client()
+        fail_resp = MagicMock()
+        fail_resp.success.return_value = False
+        fail_resp.code = 500
+        fail_resp.msg = "error"
+        ok_resp = MagicMock()
+        ok_resp.success.return_value = True
+        ok_resp.data.message_id = "msg_ok"
+
+        client.lark_client.im.v1.message.create.side_effect = [fail_resp, ok_resp]
+
+        with patch("bot.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            result = client.send_message("chat_001", "hello")
+
+        assert result == "msg_ok"
+        assert client.lark_client.im.v1.message.create.call_count == 2

@@ -711,6 +711,7 @@ class TestStreamResponse:
 
     @pytest.mark.asyncio
     async def test_returns_early_when_no_msg_id(self, bot):
+        """When placeholder fails even after retry, response is aborted with error message."""
         session = _make_session()
         bot.feishu.send_message.return_value = ""
 
@@ -718,6 +719,45 @@ class TestStreamResponse:
             await bot._stream_response("chat1", session, "test")
             mock_sh_cls.assert_not_called()
             session.client.query.assert_not_called()
+        # Should have tried send_message multiple times (retry) + error message
+        assert bot.feishu.send_message.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_error_shows_partial_response(self, bot):
+        """When streaming errors out after partial text, error includes partial content."""
+        session = _make_session()
+        session.client.query = AsyncMock(side_effect=Exception("boom"))
+        bot.feishu.send_message.return_value = "msg_id"
+        bot.sessions.close = AsyncMock()
+
+        with patch('bot.main.StreamHandler') as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_streamer.response_text = "Here is the partial answer"
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "test")
+
+        error_text = bot.feishu.update_message.call_args[0][1]
+        assert "boom" in error_text
+        assert "Partial response" in error_text
+        assert "Here is the partial answer" in error_text
+
+    @pytest.mark.asyncio
+    async def test_error_without_partial_shows_only_error(self, bot):
+        """When streaming errors before any text, only error is shown."""
+        session = _make_session()
+        session.client.query = AsyncMock(side_effect=Exception("boom"))
+        bot.feishu.send_message.return_value = "msg_id"
+        bot.sessions.close = AsyncMock()
+
+        with patch('bot.main.StreamHandler') as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_streamer.response_text = ""
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "test")
+
+        error_text = bot.feishu.update_message.call_args[0][1]
+        assert "boom" in error_text
+        assert "Partial response" not in error_text
 
 
 # ---------------------------------------------------------------------------

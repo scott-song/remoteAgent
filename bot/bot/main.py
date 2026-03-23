@@ -416,7 +416,14 @@ class ClaudeWorkspaceBot:
         start = time.time()
         msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
         if not msg_id:
-            return
+            # Placeholder failed — try once more as plain reply won't work
+            # without a message_id; send a fresh message as last resort
+            print("  [Feishu] Placeholder message failed, retrying...")
+            msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
+            if not msg_id:
+                print("  [Feishu] Placeholder failed twice — cannot stream response")
+                self.feishu.send_message(chat_id, "❌ Failed to start response. Please try again.")
+                return
 
         streamer = StreamHandler(self.feishu, chat_id, msg_id, session.bot_name, settings.stream_update_interval)
 
@@ -463,7 +470,14 @@ class ClaudeWorkspaceBot:
         except Exception as e:
             print(f"  [Error] {session.key}: {e}")
             traceback.print_exc()
-            self.feishu.update_message(msg_id, f"❌ Error: {e}")
+            # Show error with any partial response that was gathered
+            error_msg = f"❌ Error: {e}"
+            partial = getattr(streamer, "response_text", "") or ""
+            if isinstance(partial, str) and partial.strip():
+                if len(partial) > 3000:
+                    partial = partial[:3000] + "\n*(truncated)*"
+                error_msg += f"\n---\n**Partial response before error:**\n{partial}"
+            self.feishu.update_message(msg_id, error_msg)
             await self.sessions.close(session.user_id, session.bot_name)
 
 
