@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bot.agent_registry import AgentConfig
+from bot.project_registry import ProjectConfig
 from bot.security import BASE_ALLOWED_COMMANDS
 from bot.sdk_client import _load_project_mcp_servers, create_claude_client
 
@@ -14,8 +14,8 @@ from bot.sdk_client import _load_project_mcp_servers, create_claude_client
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def make_agent(tmp_path: Path, **overrides) -> AgentConfig:
-    """Build an AgentConfig with sensible defaults, overridable via kwargs."""
+def make_project(tmp_path: Path, **overrides) -> ProjectConfig:
+    """Build a ProjectConfig with sensible defaults, overridable via kwargs."""
     defaults = dict(
         name="test-agent",
         project_dir=tmp_path / "project",
@@ -31,7 +31,7 @@ def make_agent(tmp_path: Path, **overrides) -> AgentConfig:
         feishu_chat_ids=[],
     )
     defaults.update(overrides)
-    return AgentConfig(**defaults)
+    return ProjectConfig(**defaults)
 
 
 # ── _load_project_mcp_servers tests ─────────────────────────────────────────
@@ -106,19 +106,19 @@ class TestCreateClaudeClient:
     def test_creates_client_with_correct_model_and_cwd(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path)
-        create_claude_client(agent)
+        project = make_project(tmp_path)
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["model"] == "claude-opus-4-6"
-        assert kwargs["cwd"] == str(agent.project_dir.resolve())
+        assert kwargs["cwd"] == str(project.project_dir.resolve())
         MockClient.assert_called_once()
 
     def test_system_prompt_passed_when_set(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path, system_prompt="Be helpful.")
-        create_claude_client(agent)
+        project = make_project(tmp_path, system_prompt="Be helpful.")
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["system_prompt"] == "Be helpful."
@@ -126,8 +126,8 @@ class TestCreateClaudeClient:
     def test_system_prompt_absent_when_none(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path, system_prompt=None)
-        create_claude_client(agent)
+        project = make_project(tmp_path, system_prompt=None)
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert "system_prompt" not in kwargs
@@ -135,8 +135,8 @@ class TestCreateClaudeClient:
     def test_resume_session_id_passed(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path)
-        create_claude_client(agent, resume="sess-123")
+        project = make_project(tmp_path)
+        create_claude_client(project, resume="sess-123")
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["resume"] == "sess-123"
@@ -144,8 +144,8 @@ class TestCreateClaudeClient:
     def test_resume_absent_when_none(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path)
-        create_claude_client(agent, resume=None)
+        project = make_project(tmp_path)
+        create_claude_client(project, resume=None)
 
         kwargs = MockOptions.call_args[1]
         assert "resume" not in kwargs
@@ -157,8 +157,8 @@ class TestCreateClaudeClient:
         sentinel_hook = MagicMock(name="security_hook")
         mock_make_hook.return_value = sentinel_hook
 
-        agent = make_agent(tmp_path)
-        create_claude_client(agent)
+        project = make_project(tmp_path)
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         hooks = kwargs["hooks"]["PreToolUse"]
@@ -170,8 +170,8 @@ class TestCreateClaudeClient:
     def test_allowed_commands_merged(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path, allowed_commands=["docker", "make"])
-        create_claude_client(agent)
+        project = make_project(tmp_path, allowed_commands=["docker", "make"])
+        create_claude_client(project)
 
         called_cmds = mock_make_hook.call_args[0][0]
         expected = BASE_ALLOWED_COMMANDS | {"docker", "make"}
@@ -181,8 +181,8 @@ class TestCreateClaudeClient:
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
         agent_mcp = {"my-server": {"command": "run-it"}}
-        agent = make_agent(tmp_path, mcp_servers=agent_mcp)
-        create_claude_client(agent)
+        project = make_project(tmp_path, mcp_servers=agent_mcp)
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["mcp_servers"] == {"my-server": {"command": "run-it"}}
@@ -192,8 +192,8 @@ class TestCreateClaudeClient:
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
         mock_mcp.return_value = {"proj-srv": {"command": "p"}}
-        agent = make_agent(tmp_path, mcp_servers={"agent-srv": {"command": "a"}})
-        create_claude_client(agent)
+        project = make_project(tmp_path, mcp_servers={"agent-srv": {"command": "a"}})
+        create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["mcp_servers"]["proj-srv"] == {"command": "p"}
@@ -202,10 +202,10 @@ class TestCreateClaudeClient:
     def test_writes_claude_settings_json(
         self, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path)
-        create_claude_client(agent)
+        project = make_project(tmp_path)
+        create_claude_client(project)
 
-        settings_file = agent.project_dir.resolve() / ".claude_settings.json"
+        settings_file = project.project_dir.resolve() / ".claude_settings.json"
         assert settings_file.exists()
 
         data = json.loads(settings_file.read_text())
@@ -217,8 +217,8 @@ class TestCreateClaudeClient:
     def test_unrestricted_agent_has_no_restricted_dir(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path, restricted=False)
-        create_claude_client(agent)
+        project = make_project(tmp_path, restricted=False)
+        create_claude_client(project)
 
         # restricted_dir should be None
         mock_make_hook.assert_called_once()
@@ -229,8 +229,8 @@ class TestCreateClaudeClient:
     def test_restricted_agent_passes_project_dir(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        agent = make_agent(tmp_path, restricted=True)
-        create_claude_client(agent)
+        project = make_project(tmp_path, restricted=True)
+        create_claude_client(project)
 
         called_restricted_dir = mock_make_hook.call_args[0][1]
-        assert called_restricted_dir == str(agent.project_dir.resolve())
+        assert called_restricted_dir == str(project.project_dir.resolve())

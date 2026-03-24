@@ -10,16 +10,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.agent_registry import AgentConfig
-from bot.session_manager import Session, SessionManager, _CLEANUP_INTERVAL, _MAX_HISTORY_PER_AGENT
+from bot.project_registry import ProjectConfig
+from bot.session_manager import Session, SessionManager, _CLEANUP_INTERVAL, _MAX_HISTORY_PER_PROJECT
 import bot.session_manager as session_manager
 
 
 # ── Helpers ──────────────────────────────────────────────
 
 
-def _make_config(name: str = "test-bot") -> AgentConfig:
-    return AgentConfig(name=name, project_dir=Path("/tmp/project"))
+def _make_config(name: str = "test-bot") -> ProjectConfig:
+    return ProjectConfig(name=name, project_dir=Path("/tmp/project"))
 
 
 def _make_session(
@@ -34,7 +34,7 @@ def _make_session(
     return Session(
         user_id=user_id,
         bot_name=bot_name,
-        agent_config=_make_config(bot_name),
+        project_config=_make_config(bot_name),
         client=client,
         connected=connected,
         session_id=session_id,
@@ -201,10 +201,10 @@ class TestSaveToHistory:
         assert sm._history.get("test-bot") is None
 
     def test_caps_at_max_history(self, sm):
-        for i in range(_MAX_HISTORY_PER_AGENT + 5):
+        for i in range(_MAX_HISTORY_PER_PROJECT + 5):
             s = _make_session(session_id=f"s{i}")
             sm.save_to_history(s)
-        assert len(sm._history["test-bot"]) == _MAX_HISTORY_PER_AGENT
+        assert len(sm._history["test-bot"]) == _MAX_HISTORY_PER_PROJECT
 
 
 class TestGetHistory:

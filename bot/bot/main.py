@@ -10,7 +10,7 @@ import traceback
 import threading
 import time
 
-from .agent_registry import AgentRegistry
+from .project_registry import ProjectRegistry
 from .config import settings
 from .feishu_client import FeishuClient
 from .git_sync import sync_repo
@@ -46,11 +46,11 @@ HELP_TEXT = (
 
 class ClaudeWorkspaceBot:
     def __init__(self):
-        self.agents = AgentRegistry(agents_dir=settings.agents_dir)
+        self.registry = ProjectRegistry(projects_dir=settings.projects_dir)
         self.sessions = SessionManager()
         self.feishu = FeishuClient(app_id=settings.feishu_app_id, app_secret=settings.feishu_app_secret)
         self.feishu.on_message(self._on_message)
-        self._user_agents: dict[str, str] = {}
+        self._user_projects: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
@@ -58,14 +58,14 @@ class ClaudeWorkspaceBot:
         asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     def start(self):
-        agents = self.agents.list_agents()
-        if not agents:
-            print("\nNo agents configured. Add YAML files to bot/agents/")
+        projects = self.registry.list_projects()
+        if not projects:
+            print("\nNo projects configured. Add YAML files to bot/projects/")
             return
         print(f"\nClaude Workspace Bot")
         print(f"  Feishu app: {settings.feishu_app_id[:8]}...")
-        print(f"  Projects: {', '.join(a.name for a in agents)}")
-        print(f"  Default: {agents[0].name} → {agents[0].project_dir}\n")
+        print(f"  Projects: {', '.join(p.name for p in projects)}")
+        print(f"  Default: {projects[0].name} → {projects[0].project_dir}\n")
         self.feishu.start(self.loop)
         print("Listening for messages. Press Ctrl+C to stop.\n")
         try:
@@ -122,50 +122,50 @@ class ClaudeWorkspaceBot:
         else:
             self.feishu.reply(message_id, f"Unknown command: `{cmd}`\nType /help for available commands.")
 
-    # ── Agent resolution ─────────────────────────────────
+    # ── Project resolution ────────────────────────────────
 
-    def _resolve_agent(self, sender_id: str, chat_id: str) -> str:
-        agent = self.agents.get_by_chat_id(chat_id)
-        if agent:
-            return agent.name
-        name = self._user_agents.get(sender_id)
-        if name and self.agents.get(name):
+    def _resolve_project(self, sender_id: str, chat_id: str) -> str:
+        project = self.registry.get_by_chat_id(chat_id)
+        if project:
+            return project.name
+        name = self._user_projects.get(sender_id)
+        if name and self.registry.get(name):
             return name
-        agents = self.agents.list_agents()
-        return agents[0].name if agents else ""
+        projects = self.registry.list_projects()
+        return projects[0].name if projects else ""
 
     # ── Chat commands ────────────────────────────────────
 
     def _cmd_projects(self, sender_id: str, chat_id: str, message_id: str):
-        agents = self.agents.list_agents()
-        if not agents:
+        projects = self.registry.list_projects()
+        if not projects:
             self.feishu.reply(message_id, "No projects.\nUse `/addproject <name> <path>` to add one.")
             return
-        current = self._resolve_agent(sender_id, chat_id)
+        current = self._resolve_project(sender_id, chat_id)
         lines = ["**Projects:**\n"]
-        for a in agents:
-            marker = " ◀" if a.name == current else ""
-            lines.append(f"`{a.name}` — `{a.project_dir}` ({a.model}){marker}")
+        for p in projects:
+            marker = " ◀" if p.name == current else ""
+            lines.append(f"`{p.name}` — `{p.project_dir}` ({p.model}){marker}")
         self.feishu.reply(message_id, "\n".join(lines))
 
     def _cmd_project(self, name: str | None, sender_id: str, chat_id: str, message_id: str):
         if name is None:
             self._cmd_projects(sender_id, chat_id, message_id)
             return
-        agent = self.agents.get(name)
-        if not agent:
-            names = ", ".join(a.name for a in self.agents.list_agents())
+        project = self.registry.get(name)
+        if not project:
+            names = ", ".join(p.name for p in self.registry.list_projects())
             self.feishu.reply(message_id, f"Unknown project: `{name}`\nAvailable: {names}")
             return
-        self._user_agents[sender_id] = name
-        self.feishu.reply(message_id, f"Switched to **{name}** (`{agent.project_dir}`)")
+        self._user_projects[sender_id] = name
+        self.feishu.reply(message_id, f"Switched to **{name}** (`{project.project_dir}`)")
 
     def _cmd_mode(self, mode: str | None, sender_id: str, chat_id: str, message_id: str):
         if mode is None or mode not in MODE_ALIASES:
             self.feishu.reply(message_id, "Usage: `/mode [plan|auto|ask]`")
             return
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        session = self.sessions.get(sender_id, agent_name)
+        project_name = self._resolve_project(sender_id, chat_id)
+        session = self.sessions.get(sender_id, project_name)
         if not session:
             self.feishu.reply(message_id, "No active session. Send a message first.")
             return
@@ -180,13 +180,13 @@ class ClaudeWorkspaceBot:
             self.feishu.send_message(chat_id, f"Failed to switch mode: {e}")
 
     async def _cmd_new(self, sender_id: str, chat_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        await self.sessions.close(sender_id, agent_name)
+        project_name = self._resolve_project(sender_id, chat_id)
+        await self.sessions.close(sender_id, project_name)
         self.feishu.reply(message_id, "Session reset.")
 
     async def _cmd_stop(self, sender_id: str, chat_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        session = self.sessions.get(sender_id, agent_name)
+        project_name = self._resolve_project(sender_id, chat_id)
+        session = self.sessions.get(sender_id, project_name)
         if not session:
             self.feishu.reply(message_id, "No active session.")
             return
@@ -200,8 +200,8 @@ class ClaudeWorkspaceBot:
             self.feishu.reply(message_id, f"Interrupt failed: {e}")
 
     def _cmd_status(self, sender_id: str, chat_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        session = self.sessions.get(sender_id, agent_name)
+        project_name = self._resolve_project(sender_id, chat_id)
+        session = self.sessions.get(sender_id, project_name)
         if not session:
             self.feishu.reply(message_id, "No active session.")
             return
@@ -210,12 +210,12 @@ class ClaudeWorkspaceBot:
         self.feishu.reply(message_id, f"{status} ({mode} mode)")
 
     def _cmd_skills(self, sender_id: str, chat_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        if not agent_name:
+        project_name = self._resolve_project(sender_id, chat_id)
+        if not project_name:
             self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
-        agent = self.agents.get(agent_name)
-        skills_dir = agent.project_dir / ".claude" / "skills"
+        project = self.registry.get(project_name)
+        skills_dir = project.project_dir / ".claude" / "skills"
         skills = []
         if skills_dir.exists():
             for f in sorted(skills_dir.glob("*/SKILL.md")):
@@ -224,9 +224,9 @@ class ClaudeWorkspaceBot:
                 if f.name != "SKILL.md":
                     skills.append((f.stem, _read_first_line(f)))
         if not skills:
-            self.feishu.reply(message_id, f"**{agent_name}** has no skills.\nAdd: `{skills_dir}/<name>/SKILL.md`")
+            self.feishu.reply(message_id, f"**{project_name}** has no skills.\nAdd: `{skills_dir}/<name>/SKILL.md`")
             return
-        lines = [f"**Skills for {agent_name}:**\n"]
+        lines = [f"**Skills for {project_name}:**\n"]
         for name, desc in skills:
             lines.append(f"`{name}` — {desc}" if desc else f"`{name}`")
         lines.append("\nInvoke: `/skill <name>`")
@@ -236,7 +236,7 @@ class ClaudeWorkspaceBot:
         if not name:
             self._cmd_skills(sender_id, chat_id, message_id)
             return
-        if not self._resolve_agent(sender_id, chat_id):
+        if not self._resolve_project(sender_id, chat_id):
             self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
         self.feishu.reply(message_id, "⏳ Processing...")
@@ -245,18 +245,18 @@ class ClaudeWorkspaceBot:
     # ── Resume ───────────────────────────────────────────
 
     def _cmd_resume(self, arg: str | None, sender_id: str, chat_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        if not agent_name:
+        project_name = self._resolve_project(sender_id, chat_id)
+        if not project_name:
             self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
 
         if arg is None:
             # List recent sessions
-            history = self.sessions.get_history(agent_name)
+            history = self.sessions.get_history(project_name)
             if not history:
-                self.feishu.reply(message_id, f"No recent sessions for `{agent_name}`.\nPaste a session ID: `/resume <uuid>`")
+                self.feishu.reply(message_id, f"No recent sessions for `{project_name}`.\nPaste a session ID: `/resume <uuid>`")
                 return
-            lines = [f"**Recent sessions for {agent_name}:**\n"]
+            lines = [f"**Recent sessions for {project_name}:**\n"]
             for i, entry in enumerate(history, 1):
                 ts = entry.get("last_active", "?")[:16].replace("T", " ")
                 summary = entry.get("summary", "?")
@@ -269,7 +269,7 @@ class ClaudeWorkspaceBot:
         session_id = None
         if arg.isdigit():
             idx = int(arg) - 1
-            history = self.sessions.get_history(agent_name)
+            history = self.sessions.get_history(project_name)
             if 0 <= idx < len(history):
                 session_id = history[idx]["session_id"]
             else:
@@ -282,35 +282,35 @@ class ClaudeWorkspaceBot:
             return
 
         self.feishu.reply(message_id, f"⏳ Resuming session `{session_id[:8]}...`")
-        self._schedule(self._do_resume(sender_id, agent_name, session_id, chat_id))
+        self._schedule(self._do_resume(sender_id, project_name, session_id, chat_id))
 
-    async def _do_resume(self, sender_id: str, agent_name: str, session_id: str, chat_id: str):
-        agent = self.agents.get(agent_name)
-        if not agent:
-            self.feishu.send_message(chat_id, f"Project `{agent_name}` not found.")
+    async def _do_resume(self, sender_id: str, project_name: str, session_id: str, chat_id: str):
+        project = self.registry.get(project_name)
+        if not project:
+            self.feishu.send_message(chat_id, f"Project `{project_name}` not found.")
             return
 
-        await self.sessions.close(sender_id, agent_name)
+        await self.sessions.close(sender_id, project_name)
 
         # Sync git repo if configured
-        if agent.github_url:
+        if project.github_url:
             try:
-                status = sync_repo(agent.project_dir, agent.github_url)
-                print(f"  [Git] {agent_name}: {status}")
+                status = sync_repo(project.project_dir, project.github_url)
+                print(f"  [Git] {project_name}: {status}")
             except Exception as e:
-                print(f"  [Git] {agent_name}: sync failed: {e}")
+                print(f"  [Git] {project_name}: sync failed: {e}")
 
         try:
-            client = create_claude_client(agent, resume=session_id)
+            client = create_claude_client(project, resume=session_id)
             session = Session(
-                user_id=sender_id, bot_name=agent_name, agent_config=agent,
-                client=client, permission_mode=agent.permission_mode,
+                user_id=sender_id, bot_name=project_name, project_config=project,
+                client=client, permission_mode=project.permission_mode,
                 session_id=session_id,
             )
             await client.connect()
             session.connected = True
             self.sessions.store(session)
-            self.feishu.send_message(chat_id, f"**Session resumed** (`{session_id[:8]}...`)\nProject: `{agent_name}`\n\nYou can continue the conversation.")
+            self.feishu.send_message(chat_id, f"**Session resumed** (`{session_id[:8]}...`)\nProject: `{project_name}`\n\nYou can continue the conversation.")
         except Exception as e:
             print(f"  [Resume] Failed: {e}")
             traceback.print_exc()
@@ -336,7 +336,7 @@ class ClaudeWorkspaceBot:
                 github_url = parts[idx + 1]
 
         try:
-            agent = self.agents.add(name=name, project_dir=path, chat_id=chat_id if bind else None, github_url=github_url)
+            project = self.registry.add(name=name, project_dir=path, chat_id=chat_id if bind else None, github_url=github_url)
             msg = f"**Added:** `{name}` → `{path}`"
             if github_url:
                 msg += f"\nGit: `{github_url}`"
@@ -350,53 +350,53 @@ class ClaudeWorkspaceBot:
         if not name:
             self.feishu.reply(message_id, "Usage: `/removeproject <name>`")
             return
-        self.feishu.reply(message_id, f"Removed `{name}`." if self.agents.remove(name) else f"Not found: `{name}`")
+        self.feishu.reply(message_id, f"Removed `{name}`." if self.registry.remove(name) else f"Not found: `{name}`")
 
     def _cmd_bind(self, name: str | None, chat_id: str, message_id: str):
         if not name:
-            agent = self.agents.get_by_chat_id(chat_id)
-            if agent:
-                self.feishu.reply(message_id, f"Bound to `{agent.name}` (`{agent.project_dir}`)")
+            project = self.registry.get_by_chat_id(chat_id)
+            if project:
+                self.feishu.reply(message_id, f"Bound to `{project.name}` (`{project.project_dir}`)")
             else:
-                names = ", ".join(f"`{a.name}`" for a in self.agents.list_agents())
+                names = ", ".join(f"`{p.name}`" for p in self.registry.list_projects())
                 self.feishu.reply(message_id, f"Not bound.\n`/bind <name>`\nAvailable: {names}")
             return
         try:
-            self.agents.bind_chat(name, chat_id)
-            agent = self.agents.get(name)
-            self.feishu.reply(message_id, f"Bound to **{name}** (`{agent.project_dir}`)")
+            self.registry.bind_chat(name, chat_id)
+            project = self.registry.get(name)
+            self.feishu.reply(message_id, f"Bound to **{name}** (`{project.project_dir}`)")
         except ValueError as e:
             self.feishu.reply(message_id, f"Error: {e}")
 
     def _cmd_unbind(self, chat_id: str, message_id: str):
-        name = self.agents.unbind_chat(chat_id)
+        name = self.registry.unbind_chat(chat_id)
         self.feishu.reply(message_id, f"Unbound from `{name}`." if name else "Not bound.")
 
     # ── Claude session handling ──────────────────────────
 
     async def _handle_prompt(self, text: str, chat_id: str, sender_id: str, message_id: str):
-        agent_name = self._resolve_agent(sender_id, chat_id)
-        agent = self.agents.get(agent_name)
-        if not agent:
+        project_name = self._resolve_project(sender_id, chat_id)
+        project = self.registry.get(project_name)
+        if not project:
             self.feishu.send_message(chat_id, "No project configured. Use `/projects`.")
             return
 
         await self.sessions.cleanup_stale()
 
-        session = self.sessions.get(sender_id, agent_name)
+        session = self.sessions.get(sender_id, project_name)
         if not session:
             # Sync git repo if configured
-            if agent.github_url:
+            if project.github_url:
                 try:
-                    status = sync_repo(agent.project_dir, agent.github_url)
-                    print(f"  [Git] {agent_name}: {status}")
+                    status = sync_repo(project.project_dir, project.github_url)
+                    print(f"  [Git] {project_name}: {status}")
                 except Exception as e:
-                    print(f"  [Git] {agent_name}: sync failed: {e}")
+                    print(f"  [Git] {project_name}: sync failed: {e}")
 
             try:
-                client = create_claude_client(agent)
-                session = Session(user_id=sender_id, bot_name=agent_name, agent_config=agent,
-                                  client=client, permission_mode=agent.permission_mode)
+                client = create_claude_client(project)
+                session = Session(user_id=sender_id, bot_name=project_name, project_config=project,
+                                  client=client, permission_mode=project.permission_mode)
                 await client.connect()
                 session.connected = True
                 self.sessions.store(session)

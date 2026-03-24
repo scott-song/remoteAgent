@@ -1,5 +1,5 @@
 """
-Agent registry — loads project configs from YAML, supports runtime add/remove.
+Project registry — loads project configs from YAML, supports runtime add/remove.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ def _to_list(val) -> list:
 
 
 @dataclass
-class AgentConfig:
+class ProjectConfig:
     name: str
     project_dir: Path
     display_name: str = ""
@@ -37,26 +37,26 @@ class AgentConfig:
     github_url: Optional[str] = None
 
 
-class AgentRegistry:
-    def __init__(self, agents_dir: str | Path):
-        self.agents_dir = Path(agents_dir)
-        self.agents: dict[str, AgentConfig] = {}
+class ProjectRegistry:
+    def __init__(self, projects_dir: str | Path):
+        self.projects_dir = Path(projects_dir)
+        self.projects: dict[str, ProjectConfig] = {}
         self._chat_id_map: dict[str, str] = {}
-        self.agents_dir.mkdir(parents=True, exist_ok=True)
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
         self._load_all()
 
     def _load_all(self):
-        for yaml_file in sorted(self.agents_dir.glob("*.yaml")):
+        for yaml_file in sorted(self.projects_dir.glob("*.yaml")):
             try:
                 with open(yaml_file) as f:
                     raw = yaml.safe_load(f)
                 if raw:
                     self._register(raw)
             except Exception as e:
-                print(f"  [Agents] Error loading {yaml_file.name}: {e}")
+                print(f"  [Projects] Error loading {yaml_file.name}: {e}")
 
-    def _register(self, raw: dict) -> AgentConfig:
-        config = AgentConfig(
+    def _register(self, raw: dict) -> ProjectConfig:
+        config = ProjectConfig(
             name=raw["name"],
             project_dir=Path(raw["project_dir"]),
             display_name=raw.get("display_name", raw["name"]),
@@ -72,26 +72,26 @@ class AgentRegistry:
             feishu_chat_ids=_to_list(raw.get("feishu_chat_ids", raw.get("feishu_chat_id"))),
             github_url=raw.get("github_url"),
         )
-        self.agents[config.name] = config
+        self.projects[config.name] = config
         for chat_id in config.feishu_chat_ids:
             self._chat_id_map[chat_id] = config.name
         chat_info = f" (chats: {len(config.feishu_chat_ids)})" if config.feishu_chat_ids else ""
-        print(f"  [Agents] {config.name} → {config.project_dir} ({config.model}){chat_info}")
+        print(f"  [Projects] {config.name} → {config.project_dir} ({config.model}){chat_info}")
         return config
 
-    def get(self, name: str) -> Optional[AgentConfig]:
-        return self.agents.get(name)
+    def get(self, name: str) -> Optional[ProjectConfig]:
+        return self.projects.get(name)
 
-    def get_by_chat_id(self, chat_id: str) -> Optional[AgentConfig]:
+    def get_by_chat_id(self, chat_id: str) -> Optional[ProjectConfig]:
         name = self._chat_id_map.get(chat_id)
-        return self.agents.get(name) if name else None
+        return self.projects.get(name) if name else None
 
-    def list_agents(self) -> list[AgentConfig]:
-        return list(self.agents.values())
+    def list_projects(self) -> list[ProjectConfig]:
+        return list(self.projects.values())
 
     def add(self, name: str, project_dir: str, chat_id: Optional[str] = None,
-            model: str = DEFAULT_MODEL, github_url: Optional[str] = None) -> AgentConfig:
-        if name in self.agents:
+            model: str = DEFAULT_MODEL, github_url: Optional[str] = None) -> ProjectConfig:
+        if name in self.projects:
             raise ValueError(f"Project '{name}' already exists")
         raw = {
             "name": name, "project_dir": project_dir, "display_name": name,
@@ -106,53 +106,53 @@ class AgentRegistry:
         return config
 
     def bind_chat(self, name: str, chat_id: str) -> None:
-        agent = self.agents.get(name)
-        if not agent:
+        project = self.projects.get(name)
+        if not project:
             raise ValueError(f"Project '{name}' not found")
         if chat_id in self._chat_id_map:
             existing = self._chat_id_map[chat_id]
             if existing != name:
                 raise ValueError(f"Chat already bound to '{existing}'")
             return
-        agent.feishu_chat_ids.append(chat_id)
+        project.feishu_chat_ids.append(chat_id)
         self._chat_id_map[chat_id] = name
-        self._save_yaml(agent)
+        self._save_yaml(project)
 
     def unbind_chat(self, chat_id: str) -> Optional[str]:
         name = self._chat_id_map.pop(chat_id, None)
-        if name and name in self.agents:
-            agent = self.agents[name]
-            agent.feishu_chat_ids = [c for c in agent.feishu_chat_ids if c != chat_id]
-            self._save_yaml(agent)
+        if name and name in self.projects:
+            project = self.projects[name]
+            project.feishu_chat_ids = [c for c in project.feishu_chat_ids if c != chat_id]
+            self._save_yaml(project)
         return name
 
     def remove(self, name: str) -> bool:
-        agent = self.agents.pop(name, None)
-        if not agent:
+        project = self.projects.pop(name, None)
+        if not project:
             return False
-        for chat_id in agent.feishu_chat_ids:
+        for chat_id in project.feishu_chat_ids:
             self._chat_id_map.pop(chat_id, None)
-        yaml_path = self.agents_dir / f"{name}.yaml"
+        yaml_path = self.projects_dir / f"{name}.yaml"
         if yaml_path.exists():
             yaml_path.unlink()
         return True
 
-    def _save_yaml(self, agent: AgentConfig) -> None:
+    def _save_yaml(self, project: ProjectConfig) -> None:
         data = {
-            "name": agent.name, "display_name": agent.display_name,
-            "description": agent.description, "project_dir": str(agent.project_dir),
-            "model": agent.model, "permission_mode": agent.permission_mode,
-            "setting_sources": agent.setting_sources, "restricted": agent.restricted,
+            "name": project.name, "display_name": project.display_name,
+            "description": project.description, "project_dir": str(project.project_dir),
+            "model": project.model, "permission_mode": project.permission_mode,
+            "setting_sources": project.setting_sources, "restricted": project.restricted,
         }
-        if agent.system_prompt:
-            data["system_prompt"] = agent.system_prompt
-        if agent.allowed_commands:
-            data["allowed_commands"] = agent.allowed_commands
-        if agent.mcp_servers:
-            data["mcp_servers"] = agent.mcp_servers
-        if agent.feishu_chat_ids:
-            data["feishu_chat_ids"] = agent.feishu_chat_ids
-        if agent.github_url:
-            data["github_url"] = agent.github_url
-        with open(self.agents_dir / f"{agent.name}.yaml", "w") as f:
+        if project.system_prompt:
+            data["system_prompt"] = project.system_prompt
+        if project.allowed_commands:
+            data["allowed_commands"] = project.allowed_commands
+        if project.mcp_servers:
+            data["mcp_servers"] = project.mcp_servers
+        if project.feishu_chat_ids:
+            data["feishu_chat_ids"] = project.feishu_chat_ids
+        if project.github_url:
+            data["github_url"] = project.github_url
+        with open(self.projects_dir / f"{project.name}.yaml", "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)

@@ -14,21 +14,21 @@ def test_settings_defaults():
     assert isinstance(settings.stream_update_interval, float)
 
 
-def test_settings_agents_dir():
-    """agents_dir should point to an 'agents' directory."""
+def test_settings_projects_dir():
+    """projects_dir should point to a 'projects' directory."""
     from bot.config import settings
 
-    assert settings.agents_dir.name == "agents"
-    assert isinstance(settings.agents_dir, Path)
+    assert settings.projects_dir.name == "projects"
+    assert isinstance(settings.projects_dir, Path)
 
 
-def test_settings_agents_dir_relative_to_package():
-    """agents_dir should be a sibling of the bot package directory."""
+def test_settings_projects_dir_relative_to_package():
+    """projects_dir should be a sibling of the bot package directory."""
     from bot.config import settings
 
-    # agents_dir = Path(__file__).parent.parent / "agents"
-    # i.e., it is <bot_pkg>/../agents
-    assert settings.agents_dir.parent.name == "bot"
+    # projects_dir = Path(__file__).parent.parent / "projects"
+    # i.e., it is <bot_pkg>/../projects
+    assert settings.projects_dir.parent.name == "bot"
 
 
 def test_settings_type_coercion():

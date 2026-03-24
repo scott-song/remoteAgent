@@ -17,7 +17,7 @@ load_dotenv(Path(__file__).parents[2] / ".env")
 class Settings:
     feishu_app_id: str = os.getenv("FEISHU_APP_ID", "")
     feishu_app_secret: str = os.getenv("FEISHU_APP_SECRET", "")
-    agents_dir: Path = Path(__file__).parent.parent / "agents"
+    projects_dir: Path = Path(__file__).parent.parent / "projects"
     session_timeout_hours: int = int(os.getenv("SESSION_TIMEOUT_HOURS", "50"))
     stream_update_interval: float = float(os.getenv("STREAM_UPDATE_INTERVAL", "1.5"))
 

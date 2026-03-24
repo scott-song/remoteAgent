@@ -11,7 +11,7 @@ from typing import Optional
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk.types import HookMatcher
 
-from .agent_registry import AgentConfig
+from .project_registry import ProjectConfig
 from .security import BASE_ALLOWED_COMMANDS, make_bash_security_hook
 
 
@@ -43,33 +43,33 @@ def _load_project_mcp_servers(project_dir: Path) -> dict:
 
 
 def create_claude_client(
-    agent: AgentConfig,
+    project: ProjectConfig,
     resume: Optional[str] = None,
 ) -> ClaudeSDKClient:
     """
-    Create a Claude SDK client configured from an agent config.
+    Create a Claude SDK client configured from a project config.
 
     Args:
-        agent: Agent configuration
+        project: Project configuration
         resume: Session ID to resume a previous conversation
     """
-    project_dir = agent.project_dir.resolve()
+    project_dir = project.project_dir.resolve()
 
     # Build allowed commands set
-    allowed_cmds = BASE_ALLOWED_COMMANDS | set(agent.allowed_commands)
+    allowed_cmds = BASE_ALLOWED_COMMANDS | set(project.allowed_commands)
 
     # Build security hook
-    restricted_dir = str(project_dir) if agent.restricted else None
+    restricted_dir = str(project_dir) if project.restricted else None
     security_hook = make_bash_security_hook(allowed_cmds, restricted_dir)
 
-    # Load MCP servers: agent-configured + project-level from ~/.claude.json
+    # Load MCP servers: project-configured + project-level from ~/.claude.json
     project_mcp = _load_project_mcp_servers(project_dir)
-    all_mcp = {**project_mcp, **agent.mcp_servers}
+    all_mcp = {**project_mcp, **project.mcp_servers}
     mcp_tool_wildcards = [f"mcp__{name}__*" for name in all_mcp]
 
     # Build options
     options_kwargs = dict(
-        model=agent.model,
+        model=project.model,
         allowed_tools=[*BUILTIN_TOOLS, *mcp_tool_wildcards],
         mcp_servers=all_mcp if all_mcp else None,
         hooks={
@@ -82,14 +82,14 @@ def create_claude_client(
         },
         max_turns=1000,
         cwd=str(project_dir),
-        setting_sources=agent.setting_sources,
+        setting_sources=project.setting_sources,
         env={"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"},
     )
 
-    if agent.system_prompt:
-        options_kwargs["system_prompt"] = agent.system_prompt
-    if agent.permission_mode:
-        options_kwargs["permission_mode"] = agent.permission_mode
+    if project.system_prompt:
+        options_kwargs["system_prompt"] = project.system_prompt
+    if project.permission_mode:
+        options_kwargs["permission_mode"] = project.permission_mode
     if resume:
         options_kwargs["resume"] = resume
 
@@ -98,7 +98,7 @@ def create_claude_client(
     settings_file = project_dir / ".claude_settings.json"
     settings_data = {
         "permissions": {
-            "defaultMode": agent.permission_mode or "acceptEdits",
+            "defaultMode": project.permission_mode or "acceptEdits",
             "allow": [
                 "Read(./**)", "Write(./**)", "Edit(./**)",
                 "Glob(./**)", "Grep(./**)", "Bash(*)",
