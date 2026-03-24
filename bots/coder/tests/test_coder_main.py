@@ -1,4 +1,4 @@
-"""Tests for bot.main module."""
+"""Tests for coder.main module."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.main import (
+from coder.main import (
     ClaudeWorkspaceBot,
     HELP_TEXT,
     MODE_ALIASES,
@@ -130,15 +130,16 @@ class ResultMessage:
 
 @pytest.fixture
 def bot():
-    with patch('bot.main.ProjectRegistry') as mock_registry_cls, \
-         patch('bot.main.SessionManager') as mock_sessions_cls, \
-         patch('bot.main.FeishuClient') as mock_feishu_cls, \
-         patch('bot.main.settings') as mock_settings, \
-         patch('bot.main.threading'):
-        mock_settings.projects_dir = '/tmp/projects'
-        mock_settings.feishu_app_id = 'test_id'
-        mock_settings.feishu_app_secret = 'test_secret'
-        mock_settings.stream_update_interval = 1.5
+    with patch('coder.main.ProjectRegistry') as mock_registry_cls, \
+         patch('coder.main.SessionManager') as mock_sessions_cls, \
+         patch('coder.main.FeishuClient') as mock_feishu_cls, \
+         patch('coder.main.core_settings') as mock_core_settings, \
+         patch('coder.main.coder_settings') as mock_coder_settings, \
+         patch('coder.main.threading'):
+        mock_coder_settings.projects_dir = '/tmp/projects'
+        mock_core_settings.feishu_app_id = 'test_id'
+        mock_core_settings.feishu_app_secret = 'test_secret'
+        mock_core_settings.stream_update_interval = 1.5
         b = ClaudeWorkspaceBot()
         b.registry = mock_registry_cls.return_value
         b.sessions = mock_sessions_cls.return_value
@@ -533,9 +534,9 @@ class TestHandlePrompt:
         mock_client.query = AsyncMock()
         mock_client.receive_response = _make_async_receive([])
 
-        with patch('bot.main.create_claude_client', return_value=mock_client), \
-             patch('bot.main.StreamHandler') as mock_sh_cls, \
-             patch('bot.main.Session') as mock_session_cls:
+        with patch('coder.main.create_claude_client', return_value=mock_client), \
+             patch('coder.main.StreamHandler') as mock_sh_cls, \
+             patch('coder.main.Session') as mock_session_cls:
             mock_session = _make_session()
             mock_session.first_prompt = None
             mock_session.client = mock_client
@@ -559,7 +560,7 @@ class TestHandlePrompt:
         bot.sessions.save_to_history = MagicMock()
         bot.feishu.send_message.return_value = "sent_msg_id"
 
-        with patch('bot.main.StreamHandler'):
+        with patch('coder.main.StreamHandler'):
             await bot._handle_prompt("test", "chat1", "user1", "msg1")
 
         # Should NOT call create_claude_client since session exists
@@ -573,7 +574,7 @@ class TestHandlePrompt:
         bot.sessions.get.return_value = None
         bot.sessions.cleanup_stale = AsyncMock()
 
-        with patch('bot.main.create_claude_client', side_effect=Exception("connect failed")):
+        with patch('coder.main.create_claude_client', side_effect=Exception("connect failed")):
             await bot._handle_prompt("test", "chat1", "user1", "msg1")
 
         bot.feishu.send_message.assert_called()
@@ -594,10 +595,10 @@ class TestHandlePrompt:
         mock_client.query = AsyncMock()
         mock_client.receive_response = _make_async_receive([])
 
-        with patch('bot.main.create_claude_client', return_value=mock_client), \
-             patch('bot.main.sync_repo') as mock_sync, \
-             patch('bot.main.StreamHandler'), \
-             patch('bot.main.Session') as mock_session_cls:
+        with patch('coder.main.create_claude_client', return_value=mock_client), \
+             patch('coder.main.sync_repo') as mock_sync, \
+             patch('coder.main.StreamHandler'), \
+             patch('coder.main.Session') as mock_session_cls:
             mock_session = _make_session()
             mock_session.first_prompt = None
             mock_session.client = mock_client
@@ -623,7 +624,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -638,7 +639,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -653,7 +654,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -668,7 +669,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_sh_cls.return_value = MagicMock()
             await bot._stream_response("chat1", session, "test")
             assert session.session_id == "new-session-id"
@@ -686,7 +687,7 @@ class TestStreamResponse:
         )
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -700,7 +701,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_sh_cls.return_value = MagicMock()
             await bot._stream_response("chat1", session, "test")
 
@@ -715,7 +716,7 @@ class TestStreamResponse:
         session = _make_session()
         bot.feishu.send_message.return_value = ""
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             await bot._stream_response("chat1", session, "test")
             mock_sh_cls.assert_not_called()
             session.client.query.assert_not_called()
@@ -730,7 +731,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_streamer.response_text = "Here is the partial answer"
             mock_sh_cls.return_value = mock_streamer
@@ -749,7 +750,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('bot.main.StreamHandler') as mock_sh_cls:
+        with patch('coder.main.StreamHandler') as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_streamer.response_text = ""
             mock_sh_cls.return_value = mock_streamer
@@ -833,12 +834,98 @@ class TestSwitchMode:
 
 
 # ---------------------------------------------------------------------------
+# Skills commands
+# ---------------------------------------------------------------------------
+
+class TestSkills:
+    def test_skills_no_project(self, bot):
+        bot.registry.get_by_chat_id.return_value = None
+        bot._user_projects = {}
+        bot.registry.get.return_value = None
+        bot.registry.list_projects.return_value = []
+        bot._handle_command("/skills", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "No project" in reply_text
+
+    def test_skills_no_skills_dir(self, bot, tmp_path):
+        project = _make_project("proj1", project_dir=str(tmp_path))
+        bot.registry.get_by_chat_id.return_value = project
+        bot.registry.get.return_value = project
+        bot._handle_command("/skills", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "has no skills" in reply_text
+
+    def test_skills_with_skill_folder(self, bot, tmp_path):
+        # Create .claude/skills/deploy/SKILL.md
+        skills_dir = tmp_path / ".claude" / "skills" / "deploy"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("# Deploy to production\nDeploy steps here.")
+        project = _make_project("proj1", project_dir=str(tmp_path))
+        bot.registry.get_by_chat_id.return_value = project
+        bot.registry.get.return_value = project
+        bot._handle_command("/skills", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "deploy" in reply_text
+        assert "Deploy to production" in reply_text
+
+    def test_skills_with_standalone_md(self, bot, tmp_path):
+        # Create .claude/skills/review.md
+        skills_dir = tmp_path / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "review.md").write_text("# Code review\nReview checklist.")
+        project = _make_project("proj1", project_dir=str(tmp_path))
+        bot.registry.get_by_chat_id.return_value = project
+        bot.registry.get.return_value = project
+        bot._handle_command("/skills", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "review" in reply_text
+        assert "Code review" in reply_text
+
+    def test_skills_empty_skills_dir(self, bot, tmp_path):
+        # Create .claude/skills/ but no files
+        skills_dir = tmp_path / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        project = _make_project("proj1", project_dir=str(tmp_path))
+        bot.registry.get_by_chat_id.return_value = project
+        bot.registry.get.return_value = project
+        bot._handle_command("/skills", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "has no skills" in reply_text
+
+    def test_skill_no_name_shows_skills(self, bot, tmp_path):
+        project = _make_project("proj1", project_dir=str(tmp_path))
+        bot.registry.get_by_chat_id.return_value = project
+        bot.registry.get.return_value = project
+        bot._handle_command("/skill", "chat1", "user1", "msg1")
+        # Should delegate to _cmd_skills → "has no skills" (no skills dir)
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "has no skills" in reply_text
+
+    def test_skill_no_project(self, bot):
+        bot.registry.get_by_chat_id.return_value = None
+        bot._user_projects = {}
+        bot.registry.get.return_value = None
+        bot.registry.list_projects.return_value = []
+        bot._handle_command("/skill deploy", "chat1", "user1", "msg1")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "No project" in reply_text
+
+    def test_skill_valid_schedules_prompt(self, bot):
+        project = _make_project("proj1")
+        bot.registry.get_by_chat_id.return_value = project
+        with patch.object(bot, '_schedule') as mock_sched:
+            bot._handle_command("/skill deploy", "chat1", "user1", "msg1")
+            bot.feishu.reply.assert_called_once_with("msg1", "⏳ Processing...")
+            mock_sched.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # main() function
 # ---------------------------------------------------------------------------
 
 class TestMain:
     def test_main_calls_start(self):
-        with patch('bot.main.ClaudeWorkspaceBot') as mock_cls:
+        with patch('coder.main.ClaudeWorkspaceBot') as mock_cls:
             mock_bot = MagicMock()
             mock_cls.return_value = mock_bot
             main()

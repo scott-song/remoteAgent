@@ -13,10 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .project_registry import ProjectConfig
-from .config import settings
+from .config import core_settings
 
-SESSION_TIMEOUT = settings.session_timeout_hours * 60 * 60
+SESSION_TIMEOUT = core_settings.session_timeout_hours * 60 * 60
 _CLEANUP_INTERVAL = 300
 _MAX_HISTORY_PER_PROJECT = 10
 HISTORY_FILE = Path.home() / ".claude-workspace" / "sessions.json"
@@ -26,7 +25,7 @@ HISTORY_FILE = Path.home() / ".claude-workspace" / "sessions.json"
 class Session:
     user_id: str
     bot_name: str
-    project_config: ProjectConfig
+    project_dir: Path
     client: object  # ClaudeSDKClient
     connected: bool = False
     created_at: float = field(default_factory=time.time)
@@ -112,7 +111,7 @@ class SessionManager:
                 "session_id": session.session_id,
                 "summary": (session.first_prompt or "(new session)")[:50],
                 "last_active": datetime.now().isoformat(),
-                "project_dir": str(session.project_config.project_dir),
+                "project_dir": str(session.project_dir),
             })
 
         # Cap history
@@ -120,7 +119,7 @@ class SessionManager:
         self._save_history()
 
     def get_history(self, agent_name: str) -> list[dict]:
-        """Get recent session history for an agent, sorted by last_active desc."""
+        """Get recent session history for a project, sorted by last_active desc."""
         entries = self._history.get(agent_name, [])
         return sorted(entries, key=lambda e: e.get("last_active", ""), reverse=True)
 

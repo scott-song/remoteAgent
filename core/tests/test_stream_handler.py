@@ -23,7 +23,7 @@ sys.modules.setdefault("lark_oapi.api", _lark_api)
 sys.modules.setdefault("lark_oapi.api.im", _lark_im)
 sys.modules.setdefault("lark_oapi.api.im.v1", _lark_im_v1)
 
-from bot.stream_handler import StreamHandler, _render_tool, _summarize_input
+from core.stream_handler import StreamHandler, _render_tool, _summarize_input
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ class TestStreamHandler(unittest.TestCase):
 
     # -- _maybe_update throttling --
 
-    @patch("bot.stream_handler.time")
+    @patch("core.stream_handler.time")
     def test_maybe_update_throttled(self, mock_time):
         mock_time.time.return_value = 100.0
         h, client = self._make_handler(interval=1.5)
@@ -210,7 +210,7 @@ class TestStreamHandler(unittest.TestCase):
         h._maybe_update()
         client.update_message.assert_not_called()
 
-    @patch("bot.stream_handler.time")
+    @patch("core.stream_handler.time")
     def test_maybe_update_fires_after_interval(self, mock_time):
         mock_time.time.return_value = 102.0
         h, client = self._make_handler(interval=1.5)

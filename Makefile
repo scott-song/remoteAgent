@@ -1,13 +1,37 @@
-.PHONY: bot setup test
+.PHONY: coder hr setup test test-core test-coder test-hr run-coder run-hr
 
-# Run bot
-bot:
-	cd bot && .venv/bin/python -m bot.main
+# Run coder bot
+coder:
+	.venv/bin/python -m coder.main
 
-# Initial setup
+# Run HR bot
+hr:
+	.venv/bin/python -m hr.main
+
+# Setup + run coder bot
+run-coder: setup
+	.venv/bin/python -m coder.main
+
+# Setup + run HR bot
+run-hr: setup
+	.venv/bin/python -m hr.main
+
+# Initial setup — single shared venv
 setup:
-	cd bot && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+	python3.12 -m venv .venv
+	.venv/bin/pip install --upgrade pip
+	.venv/bin/pip install -e "core[dev]" -e "bots/coder[dev]" -e "bots/hr[dev]"
 
-# Run tests
+# Run all tests
 test:
-	cd bot && .venv/bin/python -m pytest tests/ -v
+	.venv/bin/python -m pytest core/tests/ bots/coder/tests/ bots/hr/tests/ -v
+
+# Per-package tests
+test-core:
+	.venv/bin/python -m pytest core/tests/ -v
+
+test-coder:
+	.venv/bin/python -m pytest bots/coder/tests/ -v
+
+test-hr:
+	.venv/bin/python -m pytest bots/hr/tests/ -v

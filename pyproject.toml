@@ -1,0 +1,3 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["core/tests", "bots/coder/tests", "bots/hr/tests"]

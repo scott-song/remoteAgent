@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 import pytest
 
-from bot.project_registry import ProjectConfig, ProjectRegistry, DEFAULT_MODEL, _to_list
+from coder.project_registry import ProjectConfig, ProjectRegistry, DEFAULT_MODEL, _to_list
 
 
 # ---------------------------------------------------------------------------

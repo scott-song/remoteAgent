@@ -2,11 +2,11 @@
 __pycache__/
 *.pyc
 .venv/
-bot/.venv/
 *.egg-info/
 dist/
 build/
 node_modules/
 .DS_Store
-bot/projects/*.yaml
-!bot/projects/example-project.yaml
+.pytest_cache/
+bots/coder/projects/*.yaml
+!bots/coder/projects/example-project.yaml

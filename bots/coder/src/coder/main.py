@@ -10,13 +10,15 @@ import traceback
 import threading
 import time
 
+from core.config import core_settings
+from core.feishu_client import FeishuClient
+from core.session_manager import Session, SessionManager
+from core.stream_handler import StreamHandler
+
+from .config import coder_settings
 from .project_registry import ProjectRegistry
-from .config import settings
-from .feishu_client import FeishuClient
 from .git_sync import sync_repo
 from .sdk_client import create_claude_client
-from .session_manager import Session, SessionManager
-from .stream_handler import StreamHandler
 
 MODE_ALIASES = {"plan": "plan", "ask": "default", "auto": "acceptEdits"}
 MODE_DISPLAY = {v: k for k, v in MODE_ALIASES.items()}
@@ -46,9 +48,9 @@ HELP_TEXT = (
 
 class ClaudeWorkspaceBot:
     def __init__(self):
-        self.registry = ProjectRegistry(projects_dir=settings.projects_dir)
+        self.registry = ProjectRegistry(projects_dir=coder_settings.projects_dir)
         self.sessions = SessionManager()
-        self.feishu = FeishuClient(app_id=settings.feishu_app_id, app_secret=settings.feishu_app_secret)
+        self.feishu = FeishuClient(app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret)
         self.feishu.on_message(self._on_message)
         self._user_projects: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
@@ -60,10 +62,10 @@ class ClaudeWorkspaceBot:
     def start(self):
         projects = self.registry.list_projects()
         if not projects:
-            print("\nNo projects configured. Add YAML files to bot/projects/")
+            print("\nNo projects configured. Add YAML files to projects/")
             return
         print(f"\nClaude Workspace Bot")
-        print(f"  Feishu app: {settings.feishu_app_id[:8]}...")
+        print(f"  Feishu app: {core_settings.feishu_app_id[:8]}...")
         print(f"  Projects: {', '.join(p.name for p in projects)}")
         print(f"  Default: {projects[0].name} → {projects[0].project_dir}\n")
         self.feishu.start(self.loop)
@@ -251,7 +253,6 @@ class ClaudeWorkspaceBot:
             return
 
         if arg is None:
-            # List recent sessions
             history = self.sessions.get_history(project_name)
             if not history:
                 self.feishu.reply(message_id, f"No recent sessions for `{project_name}`.\nPaste a session ID: `/resume <uuid>`")
@@ -265,7 +266,6 @@ class ClaudeWorkspaceBot:
             self.feishu.reply(message_id, "\n".join(lines))
             return
 
-        # Resolve session_id: either a number (index) or a UUID
         session_id = None
         if arg.isdigit():
             idx = int(arg) - 1
@@ -292,7 +292,6 @@ class ClaudeWorkspaceBot:
 
         await self.sessions.close(sender_id, project_name)
 
-        # Sync git repo if configured
         if project.github_url:
             try:
                 status = sync_repo(project.project_dir, project.github_url)
@@ -303,7 +302,7 @@ class ClaudeWorkspaceBot:
         try:
             client = create_claude_client(project, resume=session_id)
             session = Session(
-                user_id=sender_id, bot_name=project_name, project_config=project,
+                user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
                 client=client, permission_mode=project.permission_mode,
                 session_id=session_id,
             )
@@ -319,7 +318,6 @@ class ClaudeWorkspaceBot:
     # ── Project management ───────────────────────────────
 
     def _cmd_add_project(self, text: str, chat_id: str, message_id: str):
-        # /addproject <name> <path> [--github <url>] [--bind]
         parts = text.split()
         if len(parts) < 3:
             self.feishu.reply(message_id,
@@ -385,7 +383,6 @@ class ClaudeWorkspaceBot:
 
         session = self.sessions.get(sender_id, project_name)
         if not session:
-            # Sync git repo if configured
             if project.github_url:
                 try:
                     status = sync_repo(project.project_dir, project.github_url)
@@ -395,7 +392,7 @@ class ClaudeWorkspaceBot:
 
             try:
                 client = create_claude_client(project)
-                session = Session(user_id=sender_id, bot_name=project_name, project_config=project,
+                session = Session(user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
                                   client=client, permission_mode=project.permission_mode)
                 await client.connect()
                 session.connected = True
@@ -405,7 +402,6 @@ class ClaudeWorkspaceBot:
                 self.feishu.send_message(chat_id, f"Failed to create session: {e}")
                 return
 
-        # Record first prompt for session summary
         if not session.first_prompt:
             session.first_prompt = text[:50]
 
@@ -416,8 +412,6 @@ class ClaudeWorkspaceBot:
         start = time.time()
         msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
         if not msg_id:
-            # Placeholder failed — try once more as plain reply won't work
-            # without a message_id; send a fresh message as last resort
             print("  [Feishu] Placeholder message failed, retrying...")
             msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
             if not msg_id:
@@ -425,7 +419,7 @@ class ClaudeWorkspaceBot:
                 self.feishu.send_message(chat_id, "❌ Failed to start response. Please try again.")
                 return
 
-        streamer = StreamHandler(self.feishu, chat_id, msg_id, session.bot_name, settings.stream_update_interval)
+        streamer = StreamHandler(self.feishu, chat_id, msg_id, session.bot_name, core_settings.stream_update_interval)
 
         try:
             await session.client.query(text)
@@ -460,7 +454,6 @@ class ClaudeWorkspaceBot:
                         session.session_id = sid
                     break
 
-            # Persist session to history
             self.sessions.save_to_history(session)
 
             duration = f"{time.time() - start:.0f}s"
@@ -470,7 +463,6 @@ class ClaudeWorkspaceBot:
         except Exception as e:
             print(f"  [Error] {session.key}: {e}")
             traceback.print_exc()
-            # Show error with any partial response that was gathered
             error_msg = f"❌ Error: {e}"
             partial = getattr(streamer, "response_text", "") or ""
             if isinstance(partial, str) and partial.strip():

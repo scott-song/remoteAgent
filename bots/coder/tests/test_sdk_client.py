@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bot.project_registry import ProjectConfig
-from bot.security import BASE_ALLOWED_COMMANDS
-from bot.sdk_client import _load_project_mcp_servers, create_claude_client
+from coder.project_registry import ProjectConfig
+from coder.security import BASE_ALLOWED_COMMANDS
+from coder.sdk_client import _load_project_mcp_servers, create_claude_client
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ def make_project(tmp_path: Path, **overrides) -> ProjectConfig:
 class TestLoadProjectMcpServers:
     def test_no_config_file_returns_empty(self, tmp_path):
         """When the config file does not exist, return {}."""
-        with patch("bot.sdk_client.CLAUDE_CONFIG_FILE", tmp_path / "missing.json"):
+        with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", tmp_path / "missing.json"):
             result = _load_project_mcp_servers(tmp_path)
         assert result == {}
 
@@ -50,7 +50,7 @@ class TestLoadProjectMcpServers:
         config_file.write_text(json.dumps({
             "mcpServers": {"server-a": {"command": "a"}},
         }))
-        with patch("bot.sdk_client.CLAUDE_CONFIG_FILE", config_file):
+        with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(tmp_path / "proj")
         assert result == {"server-a": {"command": "a"}}
 
@@ -73,7 +73,7 @@ class TestLoadProjectMcpServers:
                 },
             },
         }))
-        with patch("bot.sdk_client.CLAUDE_CONFIG_FILE", config_file):
+        with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(project_dir)
         assert result["shared"] == {"command": "project-cmd"}
         assert result["global-only"] == {"command": "g"}
@@ -83,7 +83,7 @@ class TestLoadProjectMcpServers:
         """Malformed JSON falls back to {}."""
         config_file = tmp_path / ".claude.json"
         config_file.write_text("{bad json!!!")
-        with patch("bot.sdk_client.CLAUDE_CONFIG_FILE", config_file):
+        with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(tmp_path)
         assert result == {}
 
@@ -91,7 +91,7 @@ class TestLoadProjectMcpServers:
         """Config with no mcpServers key returns {} (no global, no project)."""
         config_file = tmp_path / ".claude.json"
         config_file.write_text(json.dumps({"someOtherKey": True}))
-        with patch("bot.sdk_client.CLAUDE_CONFIG_FILE", config_file):
+        with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(tmp_path)
         assert result == {}
 
@@ -99,9 +99,9 @@ class TestLoadProjectMcpServers:
 # ── create_claude_client tests ──────────────────────────────────────────────
 
 
-@patch("bot.sdk_client._load_project_mcp_servers", return_value={})
-@patch("bot.sdk_client.ClaudeSDKClient")
-@patch("bot.sdk_client.ClaudeAgentOptions")
+@patch("coder.sdk_client._load_project_mcp_servers", return_value={})
+@patch("coder.sdk_client.ClaudeSDKClient")
+@patch("coder.sdk_client.ClaudeAgentOptions")
 class TestCreateClaudeClient:
     def test_creates_client_with_correct_model_and_cwd(
         self, MockOptions, MockClient, mock_mcp, tmp_path
@@ -150,7 +150,7 @@ class TestCreateClaudeClient:
         kwargs = MockOptions.call_args[1]
         assert "resume" not in kwargs
 
-    @patch("bot.sdk_client.make_bash_security_hook")
+    @patch("coder.sdk_client.make_bash_security_hook")
     def test_security_hook_configured_for_bash(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
@@ -166,7 +166,7 @@ class TestCreateClaudeClient:
         assert hooks[0].matcher == "Bash"
         assert hooks[0].hooks == [sentinel_hook]
 
-    @patch("bot.sdk_client.make_bash_security_hook")
+    @patch("coder.sdk_client.make_bash_security_hook")
     def test_allowed_commands_merged(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
@@ -213,7 +213,7 @@ class TestCreateClaudeClient:
         assert "allow" in data["permissions"]
         assert "Bash(*)" in data["permissions"]["allow"]
 
-    @patch("bot.sdk_client.make_bash_security_hook")
+    @patch("coder.sdk_client.make_bash_security_hook")
     def test_unrestricted_agent_has_no_restricted_dir(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
@@ -225,7 +225,7 @@ class TestCreateClaudeClient:
         called_restricted_dir = mock_make_hook.call_args[0][1]
         assert called_restricted_dir is None
 
-    @patch("bot.sdk_client.make_bash_security_hook")
+    @patch("coder.sdk_client.make_bash_security_hook")
     def test_restricted_agent_passes_project_dir(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):

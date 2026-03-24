@@ -1,4 +1,4 @@
-"""Tests for bot.session_manager — Session dataclass & SessionManager."""
+"""Tests for core.session_manager — Session dataclass & SessionManager."""
 
 from __future__ import annotations
 
@@ -10,16 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.project_registry import ProjectConfig
-from bot.session_manager import Session, SessionManager, _CLEANUP_INTERVAL, _MAX_HISTORY_PER_PROJECT
-import bot.session_manager as session_manager
+from core.session_manager import Session, SessionManager, _CLEANUP_INTERVAL, _MAX_HISTORY_PER_PROJECT
+import core.session_manager as session_manager
 
 
 # ── Helpers ──────────────────────────────────────────────
-
-
-def _make_config(name: str = "test-bot") -> ProjectConfig:
-    return ProjectConfig(name=name, project_dir=Path("/tmp/project"))
 
 
 def _make_session(
@@ -34,7 +29,7 @@ def _make_session(
     return Session(
         user_id=user_id,
         bot_name=bot_name,
-        project_config=_make_config(bot_name),
+        project_dir=Path("/tmp/project"),
         client=client,
         connected=connected,
         session_id=session_id,
@@ -56,7 +51,6 @@ class TestSession:
 
     def test_is_stale_true_for_old(self, monkeypatch):
         s = _make_session()
-        # Make SESSION_TIMEOUT very small so session appears stale
         monkeypatch.setattr(session_manager, "SESSION_TIMEOUT", 10)
         with patch.object(time, "time", return_value=s.last_active + 11):
             assert s.is_stale() is True
@@ -64,7 +58,6 @@ class TestSession:
     def test_touch_updates_last_active(self):
         s = _make_session()
         old = s.last_active
-        # Ensure at least a tiny time delta
         time.sleep(0.01)
         s.touch()
         assert s.last_active >= old
@@ -140,7 +133,6 @@ class TestCleanupStale:
         s = _make_session()
         sm.store(s)
 
-        # Advance time so session is stale and cleanup interval is met
         fake_now = s.last_active + 500
         with patch.object(time, "time", return_value=fake_now):
             await sm.cleanup_stale()
@@ -158,7 +150,6 @@ class TestCleanupStale:
         with patch.object(time, "time", return_value=now):
             await sm.cleanup_stale()
 
-        # Session should still be there because cleanup was skipped
         assert "user1:test-bot" in sm._sessions
 
 
@@ -188,7 +179,6 @@ class TestSaveToHistory:
     def test_updates_existing_entry(self, sm):
         s = _make_session(session_id="s1", first_prompt=None)
         sm.save_to_history(s)
-        # Now update with a prompt
         s.first_prompt = "updated prompt"
         sm.save_to_history(s)
         entries = sm._history["test-bot"]
@@ -219,7 +209,7 @@ class TestGetHistory:
         assert ids == ["b", "c", "a"]
 
     def test_returns_empty_for_unknown(self, sm):
-        assert sm.get_history("unknown-agent") == []
+        assert sm.get_history("unknown-project") == []
 
 
 class TestLoadHistory:

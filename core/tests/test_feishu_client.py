@@ -16,7 +16,7 @@ import pytest
 
 def _make_client(mock_lark=None):
     """Create a FeishuClient with lark SDK mocked at the module level."""
-    with patch("bot.feishu_client.lark") as lark_mock:
+    with patch("core.feishu_client.lark") as lark_mock:
         if mock_lark:
             mock_lark(lark_mock)
         # Make the builder chain return a MagicMock
@@ -27,7 +27,7 @@ def _make_client(mock_lark=None):
         builder.log_level.return_value = builder
         builder.build.return_value = MagicMock(name="lark_client")
 
-        from bot.feishu_client import FeishuClient
+        from core.feishu_client import FeishuClient
 
         client = FeishuClient("test_app_id", "test_app_secret")
     return client
@@ -224,7 +224,7 @@ class TestReply:
         client.lark_client.im.v1.message.reply.return_value = resp
         client._reply_plain = MagicMock()
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client.reply("msg_001", "response text")
 
@@ -243,7 +243,7 @@ class TestReply:
         client.lark_client.im.v1.message.reply.side_effect = [fail_resp, ok_resp]
         client._reply_plain = MagicMock()
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client.reply("msg_001", "text")
 
@@ -260,7 +260,7 @@ class TestReply:
         client.lark_client.im.v1.message.reply.return_value = fail_resp
         client._reply_plain = MagicMock()
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client.reply("msg_001", "text")
 
@@ -285,7 +285,7 @@ class TestReplyPlainRetry:
 
         client.lark_client.im.v1.message.reply.side_effect = [fail_resp, ok_resp]
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client._reply_plain("msg_001", "text")
 
@@ -379,7 +379,7 @@ class TestUpdateMessage:
 
         client.lark_client.im.v1.message.patch.side_effect = [fail_resp, ok_resp]
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client.update_message("msg_001", "text")
 
@@ -396,7 +396,7 @@ class TestUpdateMessage:
 
         client.lark_client.im.v1.message.patch.return_value = fail_resp
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             client.update_message("msg_001", "text")
 
@@ -528,7 +528,7 @@ class TestSendMessageChunking:
 
         client.lark_client.im.v1.message.create.side_effect = [fail_resp, ok_resp]
 
-        with patch("bot.feishu_client.time") as mock_time:
+        with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
             result = client.send_message("chat_001", "hello")
 

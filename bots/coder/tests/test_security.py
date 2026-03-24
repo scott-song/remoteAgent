@@ -2,7 +2,7 @@
 
 import pytest
 
-from bot.security import (
+from coder.security import (
     extract_commands,
     _validate_paths,
     make_bash_security_hook,
