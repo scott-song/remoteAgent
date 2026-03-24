@@ -44,12 +44,21 @@ class StreamHandler:
             tool["duration_ms"] = int((time.time() - tool.get("started_at", time.time())) * 1000)
         self._maybe_update()
 
-    def finalize(self, duration_str: str, mode: str, session_id: Optional[str] = None):
+    def has_code_changes(self) -> bool:
+        """Check if the response involved file-modifying tools."""
+        code_tools = {"Write", "Edit", "Bash"}
+        return any(t["name"] in code_tools for t in self.tools)
+
+    def finalize(self, duration_str: str, mode: str, buttons: list[dict] | None = None):
         final_text = self._render_final(duration_str, mode)
         chunks = self.client._chunk_text(final_text)
-        # Update original message with first chunk
-        self.client.update_message(self.msg_id, chunks[0] if len(chunks) > 1 else final_text)
-        # Send overflow chunks as separate messages
+        # Update original message with first chunk (buttons only on main card)
+        self.client.update_message(
+            self.msg_id,
+            chunks[0] if len(chunks) > 1 else final_text,
+            buttons=buttons,
+        )
+        # Send overflow chunks as separate messages (no buttons)
         for chunk in chunks[1:]:
             self.client.send_message(self.chat_id, chunk)
 

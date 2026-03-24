@@ -171,7 +171,8 @@ class TestSaveToHistory:
     def test_adds_new_entry(self, sm):
         s = _make_session(session_id="s1", first_prompt="hello world")
         sm.save_to_history(s)
-        entries = sm._history.get("test-bot", [])
+        key = sm._history_key("user1", "test-bot")
+        entries = sm._history.get(key, [])
         assert len(entries) == 1
         assert entries[0]["session_id"] == "s1"
         assert entries[0]["summary"] == "hello world"
@@ -181,35 +182,61 @@ class TestSaveToHistory:
         sm.save_to_history(s)
         s.first_prompt = "updated prompt"
         sm.save_to_history(s)
-        entries = sm._history["test-bot"]
+        key = sm._history_key("user1", "test-bot")
+        entries = sm._history[key]
         assert len(entries) == 1
         assert entries[0]["summary"] == "updated prompt"
 
     def test_noop_when_session_id_none(self, sm):
         s = _make_session(session_id=None)
         sm.save_to_history(s)
-        assert sm._history.get("test-bot") is None
+        key = sm._history_key("user1", "test-bot")
+        assert sm._history.get(key) is None
 
     def test_caps_at_max_history(self, sm):
         for i in range(_MAX_HISTORY_PER_PROJECT + 5):
             s = _make_session(session_id=f"s{i}")
             sm.save_to_history(s)
-        assert len(sm._history["test-bot"]) == _MAX_HISTORY_PER_PROJECT
+        key = sm._history_key("user1", "test-bot")
+        assert len(sm._history[key]) == _MAX_HISTORY_PER_PROJECT
 
 
 class TestGetHistory:
     def test_returns_sorted_desc(self, sm):
-        sm._history["bot"] = [
+        key = sm._history_key("alice", "bot")
+        sm._history[key] = [
             {"session_id": "a", "last_active": "2025-01-01T00:00:00"},
             {"session_id": "b", "last_active": "2025-06-01T00:00:00"},
             {"session_id": "c", "last_active": "2025-03-01T00:00:00"},
         ]
-        result = sm.get_history("bot")
+        result = sm.get_history("alice", "bot")
         ids = [e["session_id"] for e in result]
         assert ids == ["b", "c", "a"]
 
     def test_returns_empty_for_unknown(self, sm):
-        assert sm.get_history("unknown-project") == []
+        assert sm.get_history("nobody", "unknown-project") == []
+
+    def test_legacy_fallback(self, sm):
+        """Old history keyed by bot_name only should still be found."""
+        sm._history["old-bot"] = [
+            {"session_id": "legacy1", "last_active": "2025-01-01T00:00:00"},
+        ]
+        result = sm.get_history("any-user", "old-bot")
+        assert len(result) == 1
+        assert result[0]["session_id"] == "legacy1"
+
+
+class TestGetLastSessionId:
+    def test_returns_latest(self, sm):
+        key = sm._history_key("user1", "bot")
+        sm._history[key] = [
+            {"session_id": "a", "last_active": "2025-06-01T00:00:00"},
+            {"session_id": "b", "last_active": "2025-01-01T00:00:00"},
+        ]
+        assert sm.get_last_session_id("user1", "bot") == "a"
+
+    def test_returns_none_if_empty(self, sm):
+        assert sm.get_last_session_id("user1", "nobot") is None
 
 
 class TestLoadHistory:

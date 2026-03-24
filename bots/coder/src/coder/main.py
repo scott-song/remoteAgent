@@ -11,13 +11,13 @@ import threading
 import time
 
 from core.config import core_settings
-from core.feishu_client import FeishuClient
+from core.feishu_client import FeishuClient, build_action_buttons
 from core.session_manager import Session, SessionManager
 from core.stream_handler import StreamHandler
 
 from .config import coder_settings
 from .project_registry import ProjectRegistry
-from .git_sync import sync_repo
+from .git_sync import sync_repo, commit_and_push
 from .sdk_client import create_claude_client
 
 MODE_ALIASES = {"plan": "plan", "ask": "default", "auto": "acceptEdits"}
@@ -52,6 +52,7 @@ class ClaudeWorkspaceBot:
         self.sessions = SessionManager()
         self.feishu = FeishuClient(app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret)
         self.feishu.on_message(self._on_message)
+        self.feishu.on_card_action(self._on_card_action)
         self._user_projects: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
@@ -95,6 +96,48 @@ class ClaudeWorkspaceBot:
         else:
             self.feishu.reply(message_id, "⏳ Processing...")
             self._schedule(self._handle_prompt(text, chat_id, sender_id, message_id))
+
+    # ── Card button actions ────────────────────────────────
+
+    def _on_card_action(self, sender_id: str, chat_id: str, message_id: str, action_value: dict):
+        """Handle interactive button clicks on response cards."""
+        action = action_value.get("action", "")
+        if not action or not chat_id:
+            return
+
+        # Map button actions to prompts sent to the active session
+        action_prompts = {
+            "run_tests": "Run the test suite and report the results.",
+            "show_diff": "Show a git diff of all uncommitted changes.",
+            "undo": "Undo the last file change you made. Use git checkout or restore to revert it.",
+            "continue": "Continue with the next step.",
+        }
+
+        if action == "commit_push":
+            self._schedule(self._action_commit_push(sender_id, chat_id))
+        elif action in action_prompts:
+            prompt = action_prompts[action]
+            self.feishu.send_message(chat_id, f"⏳ {action.replace('_', ' ').title()}...")
+            self._schedule(self._handle_prompt(prompt, chat_id, sender_id, message_id))
+        else:
+            print(f"  [Action] Unknown action: {action}")
+
+    async def _action_commit_push(self, sender_id: str, chat_id: str):
+        """Handle the Commit & Push button — runs git directly (fast, no Claude needed)."""
+        project_name = self._resolve_project(sender_id, chat_id)
+        project = self.registry.get(project_name)
+        if not project:
+            self.feishu.send_message(chat_id, "No project configured.")
+            return
+
+        session = self.sessions.get(sender_id, project_name)
+        summary = (session.first_prompt or "Update") if session else "Update"
+
+        try:
+            result = commit_and_push(project.project_dir, f"[claude] {summary[:72]}")
+            self.feishu.send_message(chat_id, f"**Git:** {result}")
+        except Exception as e:
+            self.feishu.send_message(chat_id, f"**Git failed:** {e}")
 
     def _handle_command(self, text: str, chat_id: str, sender_id: str, message_id: str):
         parts = text.split(None, 2)
@@ -184,7 +227,8 @@ class ClaudeWorkspaceBot:
     async def _cmd_new(self, sender_id: str, chat_id: str, message_id: str):
         project_name = self._resolve_project(sender_id, chat_id)
         await self.sessions.close(sender_id, project_name)
-        self.feishu.reply(message_id, "Session reset.")
+        self.registry.reload()
+        self.feishu.reply(message_id, "Session reset. (project configs reloaded)")
 
     async def _cmd_stop(self, sender_id: str, chat_id: str, message_id: str):
         project_name = self._resolve_project(sender_id, chat_id)
@@ -253,7 +297,7 @@ class ClaudeWorkspaceBot:
             return
 
         if arg is None:
-            history = self.sessions.get_history(project_name)
+            history = self.sessions.get_history(sender_id, project_name)
             if not history:
                 self.feishu.reply(message_id, f"No recent sessions for `{project_name}`.\nPaste a session ID: `/resume <uuid>`")
                 return
@@ -269,7 +313,7 @@ class ClaudeWorkspaceBot:
         session_id = None
         if arg.isdigit():
             idx = int(arg) - 1
-            history = self.sessions.get_history(project_name)
+            history = self.sessions.get_history(sender_id, project_name)
             if 0 <= idx < len(history):
                 session_id = history[idx]["session_id"]
             else:
@@ -390,17 +434,44 @@ class ClaudeWorkspaceBot:
                 except Exception as e:
                     print(f"  [Git] {project_name}: sync failed: {e}")
 
+            # Auto-resume: pick up the last session for this user+project
+            last_sid = self.sessions.get_last_session_id(sender_id, project_name)
+
             try:
-                client = create_claude_client(project)
+                if last_sid:
+                    print(f"  [Session] Auto-resuming {last_sid[:8]}... for {sender_id[:8]}:{project_name}")
+                    client = create_claude_client(project, resume=last_sid)
+                else:
+                    client = create_claude_client(project)
+
                 session = Session(user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
-                                  client=client, permission_mode=project.permission_mode)
+                                  client=client, permission_mode=project.permission_mode,
+                                  session_id=last_sid)
                 await client.connect()
                 session.connected = True
                 self.sessions.store(session)
-                print(f"  [Session] Created {session.key}")
+                if last_sid:
+                    print(f"  [Session] Auto-resumed {session.key}")
+                else:
+                    print(f"  [Session] Created {session.key}")
             except Exception as e:
-                self.feishu.send_message(chat_id, f"Failed to create session: {e}")
-                return
+                # If auto-resume fails, fall back to a fresh session
+                if last_sid:
+                    print(f"  [Session] Auto-resume failed, starting fresh: {e}")
+                    try:
+                        client = create_claude_client(project)
+                        session = Session(user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
+                                          client=client, permission_mode=project.permission_mode)
+                        await client.connect()
+                        session.connected = True
+                        self.sessions.store(session)
+                        print(f"  [Session] Created fresh {session.key}")
+                    except Exception as e2:
+                        self.feishu.send_message(chat_id, f"Failed to create session: {e2}")
+                        return
+                else:
+                    self.feishu.send_message(chat_id, f"Failed to create session: {e}")
+                    return
 
         if not session.first_prompt:
             session.first_prompt = text[:50]
@@ -457,8 +528,22 @@ class ClaudeWorkspaceBot:
             self.sessions.save_to_history(session)
 
             duration = f"{time.time() - start:.0f}s"
-            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode))
+            buttons = build_action_buttons(has_code_changes=streamer.has_code_changes())
+            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode), buttons=buttons)
             print(f"\n  [Done] {duration}")
+
+            # Auto git commit & push if enabled
+            project = self.registry.get(session.bot_name)
+            if project and project.auto_git and streamer.has_code_changes():
+                try:
+                    summary = session.first_prompt or "Auto-commit"
+                    result = commit_and_push(project.project_dir, f"[claude] {summary[:72]}")
+                    if "No changes" not in result:
+                        self.feishu.send_message(chat_id, f"**Auto-git:** {result}")
+                    print(f"  [Auto-git] {result}")
+                except Exception as e:
+                    print(f"  [Auto-git] Failed: {e}")
+                    self.feishu.send_message(chat_id, f"**Auto-git failed:** {e}")
 
         except Exception as e:
             print(f"  [Error] {session.key}: {e}")

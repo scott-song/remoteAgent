@@ -35,6 +35,7 @@ class ProjectConfig:
     browser_tool: str = "playwright"
     feishu_chat_ids: list[str] = field(default_factory=list)
     github_url: Optional[str] = None
+    auto_git: bool = False
 
 
 class ProjectRegistry:
@@ -71,6 +72,7 @@ class ProjectRegistry:
             browser_tool=raw.get("browser_tool", "playwright"),
             feishu_chat_ids=_to_list(raw.get("feishu_chat_ids", raw.get("feishu_chat_id"))),
             github_url=raw.get("github_url"),
+            auto_git=raw.get("auto_git", False),
         )
         self.projects[config.name] = config
         for chat_id in config.feishu_chat_ids:
@@ -78,6 +80,12 @@ class ProjectRegistry:
         chat_info = f" (chats: {len(config.feishu_chat_ids)})" if config.feishu_chat_ids else ""
         print(f"  [Projects] {config.name} → {config.project_dir} ({config.model}){chat_info}")
         return config
+
+    def reload(self):
+        """Reload all project configs from disk."""
+        self.projects.clear()
+        self._chat_id_map.clear()
+        self._load_all()
 
     def get(self, name: str) -> Optional[ProjectConfig]:
         return self.projects.get(name)
@@ -154,5 +162,7 @@ class ProjectRegistry:
             data["feishu_chat_ids"] = project.feishu_chat_ids
         if project.github_url:
             data["github_url"] = project.github_url
+        if project.auto_git:
+            data["auto_git"] = project.auto_git
         with open(self.projects_dir / f"{project.name}.yaml", "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)

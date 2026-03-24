@@ -117,6 +117,42 @@ class TestProjectRegistryListProjects:
         assert names == ["a", "b"]
 
 
+class TestProjectRegistryReload:
+    def test_reload_picks_up_yaml_changes(self, tmp_path):
+        _write_yaml(tmp_path / "p.yaml", _minimal_raw(name="p"))
+        reg = ProjectRegistry(tmp_path)
+        assert reg.get("p").allowed_commands == []
+
+        # Modify YAML on disk
+        _write_yaml(tmp_path / "p.yaml", _minimal_raw(name="p", allowed_commands=["docker"]))
+        # Before reload, still old value
+        assert reg.get("p").allowed_commands == []
+
+        reg.reload()
+        assert reg.get("p").allowed_commands == ["docker"]
+
+    def test_reload_picks_up_new_project(self, tmp_path):
+        _write_yaml(tmp_path / "a.yaml", _minimal_raw(name="a"))
+        reg = ProjectRegistry(tmp_path)
+        assert len(reg.list_projects()) == 1
+
+        _write_yaml(tmp_path / "b.yaml", _minimal_raw(name="b", project_dir="/tmp/b"))
+        reg.reload()
+        assert len(reg.list_projects()) == 2
+        assert reg.get("b") is not None
+
+    def test_reload_removes_deleted_project(self, tmp_path):
+        _write_yaml(tmp_path / "a.yaml", _minimal_raw(name="a"))
+        _write_yaml(tmp_path / "b.yaml", _minimal_raw(name="b", project_dir="/tmp/b"))
+        reg = ProjectRegistry(tmp_path)
+        assert len(reg.list_projects()) == 2
+
+        (tmp_path / "b.yaml").unlink()
+        reg.reload()
+        assert len(reg.list_projects()) == 1
+        assert reg.get("b") is None
+
+
 class TestProjectRegistryAdd:
     def test_add_creates_project_and_yaml(self, tmp_path):
         reg = ProjectRegistry(tmp_path)

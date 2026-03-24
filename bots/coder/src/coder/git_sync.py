@@ -8,6 +8,50 @@ import subprocess
 from pathlib import Path
 
 
+def commit_and_push(project_dir: Path, message: str = "Auto-commit by Claude") -> str:
+    """
+    Stage all changes, commit with the given message, and push.
+    Returns a status string.
+    """
+    project_dir = Path(project_dir)
+
+    if not (project_dir / ".git").exists():
+        return "Not a git repo — skipped"
+
+    # Stage all changes
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+    )
+
+    # Check if there are staged changes
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode == 0:
+        return "No changes to commit"
+
+    # Commit
+    result = subprocess.run(
+        ["git", "commit", "-m", message],
+        cwd=str(project_dir), capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git commit failed: {result.stderr.strip()}")
+
+    # Push
+    result = subprocess.run(
+        ["git", "push"],
+        cwd=str(project_dir), capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        # Commit succeeded but push failed — not fatal
+        return f"Committed but push failed: {result.stderr.strip()}"
+
+    return "Committed and pushed"
+
+
 def sync_repo(project_dir: Path, github_url: str) -> str:
     """
     Ensure project_dir has the latest code from github_url.

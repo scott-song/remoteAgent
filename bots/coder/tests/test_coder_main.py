@@ -26,7 +26,7 @@ from coder.main import (
 
 def _make_project(name="proj1", project_dir="/tmp/proj1", model="sonnet",
                 permission_mode="acceptEdits", github_url=None,
-                feishu_chat_ids=None):
+                feishu_chat_ids=None, auto_git=False):
     """Create a lightweight project-like object."""
     return SimpleNamespace(
         name=name,
@@ -36,6 +36,7 @@ def _make_project(name="proj1", project_dir="/tmp/proj1", model="sonnet",
         permission_mode=permission_mode,
         github_url=github_url,
         feishu_chat_ids=feishu_chat_ids or [],
+        auto_git=auto_git,
     )
 
 
@@ -805,6 +806,7 @@ class TestCmdNew:
         bot.sessions.close = AsyncMock()
         await bot._cmd_new("user1", "chat1", "msg1")
         bot.sessions.close.assert_called_once()
+        bot.registry.reload.assert_called_once()
         reply_text = bot.feishu.reply.call_args[0][1]
         assert "reset" in reply_text.lower()
 

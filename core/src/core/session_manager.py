@@ -88,13 +88,17 @@ class SessionManager:
 
     # ── Session history (persisted to disk) ──────────────
 
+    def _history_key(self, user_id: str, bot_name: str) -> str:
+        """Key for persistent history: user_id::bot_name."""
+        return f"{user_id}::{bot_name}"
+
     def save_to_history(self, session: Session):
         """Save or update a session entry in persistent history."""
         if not session.session_id:
             return
 
-        agent_name = session.bot_name
-        entries = self._history.get(agent_name, [])
+        key = self._history_key(session.user_id, session.bot_name)
+        entries = self._history.get(key, [])
 
         # Update existing or add new
         found = False
@@ -115,13 +119,22 @@ class SessionManager:
             })
 
         # Cap history
-        self._history[agent_name] = entries[:_MAX_HISTORY_PER_PROJECT]
+        self._history[key] = entries[:_MAX_HISTORY_PER_PROJECT]
         self._save_history()
 
-    def get_history(self, agent_name: str) -> list[dict]:
-        """Get recent session history for a project, sorted by last_active desc."""
-        entries = self._history.get(agent_name, [])
+    def get_history(self, user_id: str, bot_name: str) -> list[dict]:
+        """Get recent session history for a user+project, sorted by last_active desc."""
+        key = self._history_key(user_id, bot_name)
+        entries = self._history.get(key, [])
+        # Also check legacy entries keyed by bot_name only (migration)
+        if not entries:
+            entries = self._history.get(bot_name, [])
         return sorted(entries, key=lambda e: e.get("last_active", ""), reverse=True)
+
+    def get_last_session_id(self, user_id: str, bot_name: str) -> Optional[str]:
+        """Get the most recent session ID for a user+project (for auto-resume)."""
+        history = self.get_history(user_id, bot_name)
+        return history[0]["session_id"] if history else None
 
     def _load_history(self) -> dict:
         if HISTORY_FILE.exists():

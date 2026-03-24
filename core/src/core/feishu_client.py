@@ -24,11 +24,49 @@ from lark_oapi.api.im.v1 import (
     ReplyMessageRequestBody,
 )
 
+try:
+    from lark_oapi.event.callback.model.p2_card_action_trigger import (
+        P2CardActionTrigger,
+        P2CardActionTriggerResponse,
+    )
+except ImportError:
+    # Fallback for test environments where lark_oapi may be mocked
+    P2CardActionTrigger = None
+    P2CardActionTriggerResponse = None
+
 
 # Feishu interactive card limit is ~28KB; leave margin for JSON overhead
 CARD_MAX_BYTES = 25_000
 UPDATE_MAX_RETRIES = 2
 UPDATE_RETRY_DELAY = 0.5  # seconds
+
+
+def _btn(text: str, action: str, btn_type: str = "default") -> dict:
+    """Build a single Feishu card button element."""
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": text},
+        "type": btn_type,
+        "value": {"action": action},
+    }
+
+
+def build_action_buttons(has_code_changes: bool = True) -> list[dict]:
+    """Build standard action buttons for the end of a response card.
+
+    Args:
+        has_code_changes: If True, include code-related buttons (commit, diff, undo).
+    """
+    buttons = []
+    if has_code_changes:
+        buttons.extend([
+            _btn("Commit & Push", "commit_push", "primary"),
+            _btn("Run Tests", "run_tests"),
+            _btn("Show Diff", "show_diff"),
+            _btn("Undo Last Change", "undo", "danger"),
+        ])
+    buttons.append(_btn("Continue", "continue"))
+    return buttons
 
 
 class FeishuClient:
@@ -59,8 +97,9 @@ class FeishuClient:
         self._seen_ids: OrderedDict[str, float] = OrderedDict()
         self._seen_max = 500
 
-        # Callback
+        # Callbacks
         self._on_message_callback: Optional[Callable] = None
+        self._on_card_action_callback: Optional[Callable] = None
 
         # Event loop for async work
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -69,14 +108,19 @@ class FeishuClient:
         """Register callback: callback(chat_id, sender_id, sender_name, text, message_id)"""
         self._on_message_callback = callback
 
+    def on_card_action(self, callback: Callable):
+        """Register callback: callback(sender_id, chat_id, message_id, action_value)"""
+        self._on_card_action_callback = callback
+
     def start(self, loop: asyncio.AbstractEventLoop):
         """Start WebSocket connection in a background thread."""
         self._loop = loop
 
-        # Build event handler
+        # Build event handler (messages + card button actions)
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_event)
+            .register_p2_card_action_trigger(self._on_card_action_event)
             .build()
         )
 
@@ -156,18 +200,46 @@ class FeishuClient:
             import traceback
             traceback.print_exc()
 
+    def _on_card_action_event(self, data: P2CardActionTrigger) -> P2CardActionTriggerResponse:
+        """Handle card button click events from Feishu."""
+        try:
+            event = data.event
+            sender_id = event.operator.open_id if event.operator else "unknown"
+            chat_id = event.context.open_chat_id if event.context else ""
+            message_id = event.context.open_message_id if event.context else ""
+            action_value = event.action.value if event.action else {}
+
+            print(f"\n[Feishu] Button click: {sender_id[:8]}... action={action_value}")
+
+            if self._on_card_action_callback:
+                self._on_card_action_callback(sender_id, chat_id, message_id, action_value)
+
+        except Exception as e:
+            print(f"[Feishu] Error handling card action: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Return empty response (no card update needed — bot sends new messages)
+        return P2CardActionTriggerResponse()
+
     # ── Send / Update Messages ────────────────────────────
 
-    def _build_card(self, text: str) -> str:
-        """Build a Feishu interactive card (schema 2.0 with markdown)."""
+    def _build_card(self, text: str, buttons: list[dict] | None = None) -> str:
+        """Build a Feishu interactive card (schema 2.0 with markdown).
+
+        Args:
+            text: Markdown content for the card body.
+            buttons: Optional list of button defs for action row.
+                     Each: {"tag": "button", "text": {...}, "type": "...", "value": {...}}
+        """
+        elements: list[dict] = [{"tag": "markdown", "content": text}]
+        if buttons:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "action", "actions": buttons})
         card = {
             "schema": "2.0",
             "config": {"wide_screen_mode": True},
-            "body": {
-                "elements": [
-                    {"tag": "markdown", "content": text},
-                ],
-            },
+            "body": {"elements": elements},
         }
         return json.dumps(card)
 
@@ -295,7 +367,7 @@ class FeishuClient:
                 first_msg_id = msg_id
         return first_msg_id
 
-    def update_message(self, message_id: str, text: str):
+    def update_message(self, message_id: str, text: str, buttons: list[dict] | None = None):
         """Update an existing message (for streaming) with retry logic.
 
         Since we can only update a single message, content is truncated
@@ -307,7 +379,11 @@ class FeishuClient:
         if len(chunks) > 1:
             content_text = chunks[0] + "\n\n*(content truncated — full response will follow)*"
 
-        card_content = self._build_card(content_text)
+        card_content = self._build_card(content_text, buttons=buttons)
+        self._patch_message(message_id, card_content)
+
+    def _patch_message(self, message_id: str, card_content: str):
+        """Low-level message patch with retry logic."""
         for attempt in range(1 + UPDATE_MAX_RETRIES):
             request = (
                 PatchMessageRequest.builder()
