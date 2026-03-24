@@ -21,6 +21,7 @@ BASE_ALLOWED_COMMANDS = {
     "readlink", "basename", "dirname",
     "sed", "awk", "sort", "uniq", "tr", "cut", "tee",
     "curl", "xargs", "date",
+    "docker", "docker-compose",
 }
 
 _SEMICOLON_RE = re.compile(r'(?<!\\)(?<!["\'])\s*;\s*(?!["\'])')

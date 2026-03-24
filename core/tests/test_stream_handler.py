@@ -287,7 +287,9 @@ class TestStreamHandler(unittest.TestCase):
         client._chunk_text.side_effect = lambda text: ["chunk1", "chunk2", "chunk3"]
         h.finalize(duration_str="1s", mode="one-shot")
         # First chunk goes to update_message
-        client.update_message.assert_called_once_with("msg_1", "chunk1", buttons=None)
+        args, kwargs = client.update_message.call_args
+        assert args[0] == "msg_1"
+        assert args[1] == "chunk1"
         # Overflow chunks go to send_message
         assert client.send_message.call_count == 2
         client.send_message.assert_any_call("chat_1", "chunk2")

@@ -52,7 +52,6 @@ class ClaudeWorkspaceBot:
         self.sessions = SessionManager()
         self.feishu = FeishuClient(app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret)
         self.feishu.on_message(self._on_message)
-        self.feishu.on_card_action(self._on_card_action)
         self._user_projects: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
@@ -97,48 +96,6 @@ class ClaudeWorkspaceBot:
             self.feishu.reply(message_id, "⏳ Processing...")
             self._schedule(self._handle_prompt(text, chat_id, sender_id, message_id))
 
-    # ── Card button actions ────────────────────────────────
-
-    def _on_card_action(self, sender_id: str, chat_id: str, message_id: str, action_value: dict):
-        """Handle interactive button clicks on response cards."""
-        action = action_value.get("action", "")
-        if not action or not chat_id:
-            return
-
-        # Map button actions to prompts sent to the active session
-        action_prompts = {
-            "run_tests": "Run the test suite and report the results.",
-            "show_diff": "Show a git diff of all uncommitted changes.",
-            "undo": "Undo the last file change you made. Use git checkout or restore to revert it.",
-            "continue": "Continue with the next step.",
-        }
-
-        if action == "commit_push":
-            self._schedule(self._action_commit_push(sender_id, chat_id))
-        elif action in action_prompts:
-            prompt = action_prompts[action]
-            self.feishu.send_message(chat_id, f"⏳ {action.replace('_', ' ').title()}...")
-            self._schedule(self._handle_prompt(prompt, chat_id, sender_id, message_id))
-        else:
-            print(f"  [Action] Unknown action: {action}")
-
-    async def _action_commit_push(self, sender_id: str, chat_id: str):
-        """Handle the Commit & Push button — runs git directly (fast, no Claude needed)."""
-        project_name = self._resolve_project(sender_id, chat_id)
-        project = self.registry.get(project_name)
-        if not project:
-            self.feishu.send_message(chat_id, "No project configured.")
-            return
-
-        session = self.sessions.get(sender_id, project_name)
-        summary = (session.first_prompt or "Update") if session else "Update"
-
-        try:
-            result = commit_and_push(project.project_dir, f"[claude] {summary[:72]}")
-            self.feishu.send_message(chat_id, f"**Git:** {result}")
-        except Exception as e:
-            self.feishu.send_message(chat_id, f"**Git failed:** {e}")
-
     def _handle_command(self, text: str, chat_id: str, sender_id: str, message_id: str):
         parts = text.split(None, 2)
         cmd = parts[0].lower()
@@ -159,6 +116,12 @@ class ClaudeWorkspaceBot:
             "/removeproject": lambda: self._cmd_remove_project(arg, message_id),
             "/bind": lambda: self._cmd_bind(arg, chat_id, message_id),
             "/unbind": lambda: self._cmd_unbind(chat_id, message_id),
+            # Quick action commands (shown as tappable buttons on response cards)
+            "/commit": lambda: self._schedule(self._cmd_commit(sender_id, chat_id, message_id)),
+            "/test": lambda: self._quick_action("Run the test suite and report the results.", chat_id, sender_id, message_id),
+            "/diff": lambda: self._quick_action("Show a git diff of all uncommitted changes.", chat_id, sender_id, message_id),
+            "/undo": lambda: self._quick_action("Undo the last file change you made. Use git checkout or restore to revert it.", chat_id, sender_id, message_id),
+            "/continue": lambda: self._quick_action("Continue with the next step.", chat_id, sender_id, message_id),
         }
 
         handler = commands.get(cmd)
@@ -178,6 +141,30 @@ class ClaudeWorkspaceBot:
             return name
         projects = self.registry.list_projects()
         return projects[0].name if projects else ""
+
+    # ── Quick actions (tappable from response cards) ─────
+
+    def _quick_action(self, prompt: str, chat_id: str, sender_id: str, message_id: str):
+        """Send a predefined prompt to the active session."""
+        self.feishu.reply(message_id, "⏳ Processing...")
+        self._schedule(self._handle_prompt(prompt, chat_id, sender_id, message_id))
+
+    async def _cmd_commit(self, sender_id: str, chat_id: str, message_id: str):
+        """Commit & push via git directly (fast, no Claude needed)."""
+        project_name = self._resolve_project(sender_id, chat_id)
+        project = self.registry.get(project_name)
+        if not project:
+            self.feishu.send_message(chat_id, "No project configured.")
+            return
+
+        session = self.sessions.get(sender_id, project_name)
+        summary = (session.first_prompt or "Update") if session else "Update"
+
+        try:
+            result = commit_and_push(project.project_dir, f"[claude] {summary[:72]}")
+            self.feishu.send_message(chat_id, f"**Git:** {result}")
+        except Exception as e:
+            self.feishu.send_message(chat_id, f"**Git failed:** {e}")
 
     # ── Chat commands ────────────────────────────────────
 
@@ -528,8 +515,8 @@ class ClaudeWorkspaceBot:
             self.sessions.save_to_history(session)
 
             duration = f"{time.time() - start:.0f}s"
-            buttons = build_action_buttons(has_code_changes=streamer.has_code_changes())
-            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode), buttons=buttons)
+            buttons_text = build_action_buttons(has_code_changes=streamer.has_code_changes())
+            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode), buttons_text=buttons_text)
             print(f"\n  [Done] {duration}")
 
             # Auto git commit & push if enabled

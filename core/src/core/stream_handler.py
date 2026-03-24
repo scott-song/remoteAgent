@@ -49,16 +49,12 @@ class StreamHandler:
         code_tools = {"Write", "Edit", "Bash"}
         return any(t["name"] in code_tools for t in self.tools)
 
-    def finalize(self, duration_str: str, mode: str, buttons: list[dict] | None = None):
-        final_text = self._render_final(duration_str, mode)
+    def finalize(self, duration_str: str, mode: str, buttons_text: str = ""):
+        final_text = self._render_final(duration_str, mode, buttons_text)
         chunks = self.client._chunk_text(final_text)
-        # Update original message with first chunk (buttons only on main card)
-        self.client.update_message(
-            self.msg_id,
-            chunks[0] if len(chunks) > 1 else final_text,
-            buttons=buttons,
-        )
-        # Send overflow chunks as separate messages (no buttons)
+        # Update original message with first chunk
+        self.client.update_message(self.msg_id, chunks[0] if len(chunks) > 1 else final_text)
+        # Send overflow chunks as separate messages
         for chunk in chunks[1:]:
             self.client.send_message(self.chat_id, chunk)
 
@@ -93,13 +89,15 @@ class StreamHandler:
         self._tools_rendered_count = len(finished)
         return "\n".join(parts)
 
-    def _render_final(self, duration_str: str, mode: str) -> str:
+    def _render_final(self, duration_str: str, mode: str, buttons_text: str = "") -> str:
         parts = []
         if self.tools:
             parts.extend(_render_tool(t) for t in self.tools)
             parts.append("---")
         parts.append(self.response_text or "(no response)")
         parts.append(f"\n*{duration_str} | {mode}*")
+        if buttons_text:
+            parts.append(f"\n{buttons_text}")
         return "\n".join(parts)
 
 

@@ -1,20 +1,20 @@
 .PHONY: coder hr setup test test-core test-coder test-hr run-coder run-hr
 
-# Run coder bot
+# Run coder bot (logs to bot.log)
 coder:
-	.venv/bin/python -m coder.main
+	.venv/bin/python -u -m coder.main 2>&1 | tee bot.log
 
-# Run HR bot
+# Run HR bot (logs to bot.log)
 hr:
-	.venv/bin/python -m hr.main
+	.venv/bin/python -u -m hr.main 2>&1 | tee bot.log
 
-# Setup + run coder bot
+# Setup + run coder bot (logs to bot.log)
 run-coder: setup
-	.venv/bin/python -m coder.main
+	.venv/bin/python -u -m coder.main 2>&1 | tee bot.log
 
-# Setup + run HR bot
+# Setup + run HR bot (logs to bot.log)
 run-hr: setup
-	.venv/bin/python -m hr.main
+	.venv/bin/python -u -m hr.main 2>&1 | tee bot.log
 
 # Initial setup — single shared venv
 setup:
