@@ -10,7 +10,9 @@ The bot runs Claude with Bash enabled on behalf of remote chat users, against re
 
 ## Decision
 
-We will enforce security via a **PreToolUse hook on Bash** that (a) validates each command against a base allowlist plus per-project `allowed_commands`, and (b) when the project is `restricted`, confines file paths to the project directory. The policy is **per-project, not per-user** — all users sharing a project share its policy.
+We will enforce security via a **PreToolUse hook on Bash** that (a) validates each command against a base allowlist plus per-project `allowed_commands`, and (b) when the project is `restricted`, applies a **best-effort** path restriction keeping file-path arguments within the project directory. The policy is **per-project, not per-user** — all users sharing a project share its policy.
+
+This is a guardrail against accidental / careless commands, **not a security sandbox**. It is best-effort by design: the allowlist permits language interpreters (`python3`, `node`, `npx`) and `docker`, any of which can execute arbitrary code and bypass the path restriction. See *Consequences → Harder* for the concrete gaps.
 
 ## Alternatives considered
 
@@ -26,7 +28,8 @@ We will enforce security via a **PreToolUse hook on Bash** that (a) validates ea
 
 **Harder (costs / negative consequences):**
 - Allowlist maintenance burden — new legitimate commands must be added.
-- Command parsing/validation is an ongoing correctness and security surface.
+- **The path restriction is best-effort, not a hard boundary.** Allowing interpreters (`python3`/`node`/`npx`) and `docker` means arbitrary code execution can ignore the path check entirely. The token-based path parser also has gaps: it skips `--flag=/path` tokens, does not resolve `~` / `$VAR` / `$(...)` expansion, and only inspects tokens that lexically look like paths.
+- Command-name extraction is heuristic (semicolon-split + shlex) and an ongoing correctness/security surface.
 - No per-user accountability — any chat member inherits the project's full policy (documented limitation).
 
 **To revisit when:**
