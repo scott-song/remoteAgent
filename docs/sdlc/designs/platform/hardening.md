@@ -1,6 +1,6 @@
 # Design: platform/hardening
 
-> Owner: Architect · Status: draft · Last updated: 2026-06-12
+> Owner: Architect · Status: approved · Last updated: 2026-06-12
 > Spec: `docs/sdlc/specs/platform/hardening.md` · Targets spec version: 2026-06-12 (commit `249915b`)
 
 ## Summary
