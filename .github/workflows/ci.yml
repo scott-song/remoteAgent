@@ -17,6 +17,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # The matrix installs declared floors (not the lockfile): requirements.lock is
+      # frozen on one interpreter, while this job's purpose is proving 3.10-3.12 support.
+      # The quality job below installs from the lockfile for the reproducibility check.
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -34,9 +37,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
+      - name: Install (from lockfile — reproducibility check)
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.lock
           pip install -e "core[dev]" -e "bots/coder[dev]" -e "bots/hr[dev]" ruff mypy
       - name: Lint
         run: ruff check core bots

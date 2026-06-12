@@ -180,10 +180,7 @@ class FeishuClient:
                 self._on_message_callback(chat_id, sender_id, sender_name, text, message_id)
 
         except Exception as e:
-            logger.error(f"[Feishu] Error handling message: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"[Feishu] Error handling message: {e}", exc_info=True)
 
     # ── Send / Update Messages ────────────────────────────
 

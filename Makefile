@@ -24,6 +24,7 @@ setup:
 	@test -n "$(PYTHON)" || { echo "Python 3.10+ is required"; exit 1; }
 	$(PYTHON) -m venv .venv
 	.venv/bin/pip install --upgrade pip
+	.venv/bin/pip install -r requirements.lock
 	.venv/bin/pip install -e "core[dev]" -e "bots/coder[dev]" -e "bots/hr[dev]" ruff mypy pytest-cov pre-commit pip-tools
 	.venv/bin/pre-commit install
 

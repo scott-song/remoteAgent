@@ -418,7 +418,7 @@ class ClaudeWorkspaceBot:
             if bind:
                 msg += "\nBound ✅"
             self.feishu.reply(message_id, msg)
-        except (ValueError, Exception) as e:
+        except Exception as e:
             self.feishu.reply(message_id, f"Error: {e}")
 
     def _cmd_remove_project(self, name: str | None, message_id: str):
