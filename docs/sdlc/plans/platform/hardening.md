@@ -2,7 +2,7 @@
 
 > Owner: Planner → Dev (live updates) · Status: approved · Last updated: 2026-06-12
 > Spec: `docs/sdlc/specs/platform/hardening.md` · Spec version targeted: 2026-06-12 (commit `249915b`)
-> Design: `docs/sdlc/designs/platform/hardening.md` · Design version targeted: 2026-06-12 (commit `e727b38`)
+> Design: `docs/sdlc/designs/platform/hardening.md` · Design version targeted: 2026-06-12 (commit `35a3ae9`)
 
 ## Approach
 
