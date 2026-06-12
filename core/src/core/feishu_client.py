@@ -12,7 +12,7 @@ import json
 import threading
 import time
 from collections import OrderedDict
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
@@ -140,7 +140,7 @@ class FeishuClient:
         logger.info(f"[Feishu] WebSocket connecting (app: {self.app_id[:8]}...)")
         return thread
 
-    def _on_event(self, data) -> None:
+    def _on_event(self, data: Any) -> None:
         """Handle incoming message event from Feishu."""
         try:
             message = data.event.message

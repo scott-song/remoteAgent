@@ -8,10 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from coder.commands import _read_first_line
 from coder.main import (
     HELP_TEXT,
     ClaudeWorkspaceBot,
-    _read_first_line,
     main,
 )
 
