@@ -853,7 +853,8 @@ class TestCmdNew:
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
         bot.sessions.close = AsyncMock()
         await bot._cmd_new("user1", "chat1", "msg1")
-        bot.sessions.close.assert_called_once()
+        # AC-4: close targets this chat's session specifically (user, project, chat)
+        bot.sessions.close.assert_called_once_with("user1", "proj1", "chat1")
         bot.registry.reload.assert_called_once()
         reply_text = bot.feishu.reply.call_args[0][1]
         assert "reset" in reply_text.lower()

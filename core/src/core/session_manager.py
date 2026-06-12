@@ -1,6 +1,6 @@
 """
-Session manager — Claude SDK sessions keyed by (user_id, project_name).
-Includes persistent history for session resume across bot restarts.
+Session manager — Claude SDK sessions keyed by (user_id, project_name, chat_id).
+Includes persistent history (per user+project+chat) for resume across bot restarts.
 """
 
 from __future__ import annotations
