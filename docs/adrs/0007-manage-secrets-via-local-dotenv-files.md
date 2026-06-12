@@ -1,6 +1,6 @@
 # ADR-0007: Manage secrets via local dotenv files
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

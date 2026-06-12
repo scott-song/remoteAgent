@@ -1,6 +1,6 @@
 # ADR-0008: Use pytest with a CI coverage gate as the test strategy
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

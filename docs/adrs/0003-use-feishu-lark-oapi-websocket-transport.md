@@ -1,6 +1,6 @@
 # ADR-0003: Use Feishu (lark-oapi) WebSocket long-connection as the messaging transport
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

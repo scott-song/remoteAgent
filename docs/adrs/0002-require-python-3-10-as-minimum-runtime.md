@@ -1,6 +1,6 @@
 # ADR-0002: Require Python 3.10 as the minimum runtime
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

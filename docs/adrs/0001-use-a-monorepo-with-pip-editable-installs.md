@@ -1,6 +1,6 @@
 # ADR-0001: Use a monorepo with pip editable installs
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

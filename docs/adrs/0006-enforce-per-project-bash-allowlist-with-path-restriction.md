@@ -1,6 +1,6 @@
 # ADR-0006: Enforce a per-project bash allowlist with path restriction
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 

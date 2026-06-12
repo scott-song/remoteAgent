@@ -1,6 +1,6 @@
 # ADR-0004: Use the Claude Agent SDK as the agent engine
 
-**Status:** Proposed
+**Status:** Accepted (2026-06-12)
 **Supersedes:** —
 **Superseded by:** —
 
