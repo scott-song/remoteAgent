@@ -14,7 +14,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T1 — Pin dependencies, version core, generate lockfile
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `core/pyproject.toml`, `bots/coder/pyproject.toml`, `bots/hr/pyproject.toml`, `requirements.lock`
 - **Design**: § Dependency pinning + lockfile
 - **Covers**: AC-6
@@ -23,7 +23,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T2 — Makefile: Python ≥3.10 probe + quality targets
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `Makefile`
 - **Design**: § Makefile Python probe; § Tooling config
 - **Covers**: AC-7 (probe); infrastructure for AC-3/AC-4 (`lint`/`typecheck`/`format`/`lock` targets)
@@ -31,7 +31,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T3 — ruff + mypy config
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `pyproject.toml` (root — add `[tool.ruff]`, `[tool.mypy]`)
 - **Design**: § Tooling config
 - **Covers**: AC-3 (config), AC-4 (config) — *completed by T5*
@@ -39,7 +39,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T4 — Logging layer + replace print()
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `core/src/core/logging_config.py` (new), `core/src/core/feishu_client.py`, `core/src/core/session_manager.py`, `bots/coder/src/coder/main.py`, `bots/coder/src/coder/project_registry.py`, bot entrypoint(s) call `setup_logging()`
 - **Design**: § Logging layer (AC-8)
 - **Covers**: AC-8
@@ -47,7 +47,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T5 — Make lint + typecheck + format green
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: across `core/`, `bots/` (auto-fixes + residual manual fixes)
 - **Design**: § Tooling config
 - **Covers**: AC-3 (completion), AC-4 (completion)
@@ -55,7 +55,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T6 — pre-commit hooks
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `.pre-commit-config.yaml`
 - **Design**: § Tooling config
 - **Covers**: AC-5
@@ -63,7 +63,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T7 — Sync .env.example (+ LOG_LEVEL)
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `.env.example`
 - **Design**: § `.env.example` sync (AC-9)
 - **Covers**: AC-9
@@ -71,7 +71,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T8 — CI workflow
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `.github/workflows/ci.yml`
 - **Design**: § CI workflow (AC-1, AC-2)
 - **Covers**: AC-1, AC-2
@@ -79,7 +79,7 @@ Nine independently-committable tasks, ordered so each is testable on its own. Fo
 
 ### T9 — Developer docs
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `CONTRIBUTING.md`, `ARCHITECTURE.md`, `.claude/CLAUDE.md`
 - **Design**: § Docs (AC-10)
 - **Covers**: AC-10

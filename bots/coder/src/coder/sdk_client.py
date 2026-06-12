@@ -6,7 +6,7 @@ Creates configured ClaudeSDKClient instances from agent configs.
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk.types import HookMatcher
@@ -14,11 +14,18 @@ from claude_agent_sdk.types import HookMatcher
 from .project_registry import ProjectConfig
 from .security import BASE_ALLOWED_COMMANDS, make_bash_security_hook
 
-
 # Built-in tools to enable
 BUILTIN_TOOLS = [
-    "Read", "Write", "Edit", "Glob", "Grep", "Bash",
-    "Skill", "WebSearch", "WebFetch", "Task",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Bash",
+    "Skill",
+    "WebSearch",
+    "WebFetch",
+    "Task",
 ]
 
 # Claude Code CLI config (for MCP server discovery)
@@ -34,9 +41,7 @@ def _load_project_mcp_servers(project_dir: Path) -> dict:
             config = json.load(f)
         global_servers = config.get("mcpServers", {})
         project_key = str(project_dir.resolve())
-        project_servers = (
-            config.get("projects", {}).get(project_key, {}).get("mcpServers", {})
-        )
+        project_servers = config.get("projects", {}).get(project_key, {}).get("mcpServers", {})
         return {**global_servers, **project_servers}
     except (json.JSONDecodeError, IOError):
         return {}
@@ -68,7 +73,7 @@ def create_claude_client(
     mcp_tool_wildcards = [f"mcp__{name}__*" for name in all_mcp]
 
     # Build options
-    options_kwargs = dict(
+    options_kwargs: dict[str, Any] = dict(
         model=project.model,
         allowed_tools=[*BUILTIN_TOOLS, *mcp_tool_wildcards],
         mcp_servers=all_mcp if all_mcp else None,
@@ -100,8 +105,12 @@ def create_claude_client(
         "permissions": {
             "defaultMode": project.permission_mode or "acceptEdits",
             "allow": [
-                "Read(./**)", "Write(./**)", "Edit(./**)",
-                "Glob(./**)", "Grep(./**)", "Bash(*)",
+                "Read(./**)",
+                "Write(./**)",
+                "Edit(./**)",
+                "Glob(./**)",
+                "Grep(./**)",
+                "Bash(*)",
                 *mcp_tool_wildcards,
             ],
         },

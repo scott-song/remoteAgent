@@ -1,18 +1,17 @@
 """Tests for bot.feishu_client module."""
+
 from __future__ import annotations
 
 import json
-import time
+import logging
 from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_client(mock_lark=None):
     """Create a FeishuClient with lark SDK mocked at the module level."""
@@ -60,6 +59,7 @@ def _make_event(
 # __init__
 # ---------------------------------------------------------------------------
 
+
 class TestInit:
     def test_app_id_stored(self):
         client = _make_client()
@@ -83,6 +83,7 @@ class TestInit:
 # on_message
 # ---------------------------------------------------------------------------
 
+
 class TestOnMessage:
     def test_registers_callback(self):
         client = _make_client()
@@ -94,6 +95,7 @@ class TestOnMessage:
 # ---------------------------------------------------------------------------
 # _build_card
 # ---------------------------------------------------------------------------
+
 
 class TestBuildCard:
     def test_returns_valid_json_with_schema(self):
@@ -115,6 +117,7 @@ class TestBuildCard:
 # ---------------------------------------------------------------------------
 # _on_event
 # ---------------------------------------------------------------------------
+
 
 class TestOnEvent:
     def test_valid_text_triggers_callback(self):
@@ -202,6 +205,7 @@ class TestOnEvent:
 # reply
 # ---------------------------------------------------------------------------
 
+
 class TestReply:
     def test_success_no_fallback(self):
         client = _make_client()
@@ -273,6 +277,7 @@ class TestReply:
 # _reply_plain retry
 # ---------------------------------------------------------------------------
 
+
 class TestReplyPlainRetry:
     def test_reply_plain_retries_on_failure(self):
         client = _make_client()
@@ -299,17 +304,14 @@ class TestReplyPlainRetry:
 
         client._reply_plain("msg_001", "x" * 10_000)
 
-        call_args = client.lark_client.im.v1.message.reply.call_args
-        # The content should be JSON with text truncated to 4000
-        import json
-        request_body = call_args[0][0]  # the request object
-        # Just verify it was called successfully (content truncation is in the code)
+        # Content is JSON with text truncated to 4000 (truncation logic lives in the code).
         client.lark_client.im.v1.message.reply.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
 # send_message
 # ---------------------------------------------------------------------------
+
 
 class TestSendMessage:
     def test_success_returns_message_id(self):
@@ -341,20 +343,21 @@ class TestSendMessage:
 # update_message
 # ---------------------------------------------------------------------------
 
+
 class TestUpdateMessage:
-    def test_success_no_error(self, capsys):
+    def test_success_no_error(self, caplog):
         client = _make_client()
         resp = MagicMock()
         resp.success.return_value = True
         client.lark_client.im.v1.message.patch.return_value = resp
 
-        client.update_message("msg_001", "updated text")
+        with caplog.at_level(logging.WARNING):
+            client.update_message("msg_001", "updated text")
 
         client.lark_client.im.v1.message.patch.assert_called_once()
-        captured = capsys.readouterr()
-        assert "Update failed" not in captured.out
+        assert "Update failed" not in caplog.text
 
-    def test_failure_prints_error(self, capsys):
+    def test_failure_logs_error(self, caplog):
         client = _make_client()
         resp = MagicMock()
         resp.success.return_value = False
@@ -362,10 +365,10 @@ class TestUpdateMessage:
         resp.msg = "patch error"
         client.lark_client.im.v1.message.patch.return_value = resp
 
-        client.update_message("msg_001", "updated text")
+        with caplog.at_level(logging.WARNING):
+            client.update_message("msg_001", "updated text")
 
-        captured = capsys.readouterr()
-        assert "Update failed" in captured.out
+        assert "Update failed" in caplog.text
 
     def test_retry_on_failure_then_success(self):
         """update_message retries up to UPDATE_MAX_RETRIES times."""
@@ -420,6 +423,7 @@ class TestUpdateMessage:
 # _chunk_text
 # ---------------------------------------------------------------------------
 
+
 class TestChunkText:
     def test_small_text_single_chunk(self):
         client = _make_client()
@@ -461,6 +465,7 @@ class TestChunkText:
 # reply with overflow
 # ---------------------------------------------------------------------------
 
+
 class TestReplyOverflow:
     def test_reply_overflow_sends_extra_chunks(self):
         """When reply text is too large, overflow chunks go via send_message."""
@@ -498,6 +503,7 @@ class TestReplyOverflow:
 # ---------------------------------------------------------------------------
 # send_message chunking
 # ---------------------------------------------------------------------------
+
 
 class TestSendMessageChunking:
     def test_large_message_split_into_multiple_sends(self):

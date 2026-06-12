@@ -13,9 +13,12 @@ _lark_api = types.ModuleType("lark_oapi.api")
 _lark_im = types.ModuleType("lark_oapi.api.im")
 _lark_im_v1 = types.ModuleType("lark_oapi.api.im.v1")
 for _attr in (
-    "CreateMessageRequest", "CreateMessageRequestBody",
-    "PatchMessageRequest", "PatchMessageRequestBody",
-    "ReplyMessageRequest", "ReplyMessageRequestBody",
+    "CreateMessageRequest",
+    "CreateMessageRequestBody",
+    "PatchMessageRequest",
+    "PatchMessageRequestBody",
+    "ReplyMessageRequest",
+    "ReplyMessageRequestBody",
 ):
     setattr(_lark_im_v1, _attr, MagicMock())
 sys.modules.setdefault("lark_oapi", _lark)
@@ -23,12 +26,12 @@ sys.modules.setdefault("lark_oapi.api", _lark_api)
 sys.modules.setdefault("lark_oapi.api.im", _lark_im)
 sys.modules.setdefault("lark_oapi.api.im.v1", _lark_im_v1)
 
-from core.stream_handler import StreamHandler, _render_tool, _summarize_input
-
+from core.stream_handler import StreamHandler, _render_tool, _summarize_input  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # _summarize_input
 # ---------------------------------------------------------------------------
+
 
 class TestSummarizeInput(unittest.TestCase):
     def test_empty_input_returns_empty(self):
@@ -54,11 +57,14 @@ class TestSummarizeInput(unittest.TestCase):
         )
 
     def test_edit_with_old_new_returns_diff(self):
-        result = _summarize_input("Edit", {
-            "file_path": "/a/b.py",
-            "old_string": "foo",
-            "new_string": "bar",
-        })
+        result = _summarize_input(
+            "Edit",
+            {
+                "file_path": "/a/b.py",
+                "old_string": "foo",
+                "new_string": "bar",
+            },
+        )
         self.assertIn("/a/b.py", result)
         self.assertIn("- foo", result)
         self.assertIn("+ bar", result)
@@ -105,6 +111,7 @@ class TestSummarizeInput(unittest.TestCase):
 # _render_tool
 # ---------------------------------------------------------------------------
 
+
 class TestRenderTool(unittest.TestCase):
     def test_success_shows_check_and_duration(self):
         tool = {"name": "Read", "status": "success", "duration_ms": 42, "input": {}}
@@ -124,8 +131,12 @@ class TestRenderTool(unittest.TestCase):
         self.assertNotIn("ms", result)
 
     def test_tool_with_summary_has_code_block(self):
-        tool = {"name": "Read", "status": "success", "duration_ms": 5,
-                "input": {"file_path": "/tmp/a.py"}}
+        tool = {
+            "name": "Read",
+            "status": "success",
+            "duration_ms": 5,
+            "input": {"file_path": "/tmp/a.py"},
+        }
         result = _render_tool(tool)
         self.assertIn("```", result)
         self.assertIn("/tmp/a.py", result)
@@ -139,6 +150,7 @@ class TestRenderTool(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # StreamHandler
 # ---------------------------------------------------------------------------
+
 
 class TestStreamHandler(unittest.TestCase):
     def _make_handler(self, interval=1.5):
@@ -277,7 +289,6 @@ class TestStreamHandler(unittest.TestCase):
         result = h._render_final("1s", "one-shot")
         self.assertIn("(no response)", result)
 
-
     # -- finalize with chunking --
 
     def test_finalize_sends_overflow_chunks(self):
@@ -348,27 +359,43 @@ class TestStreamHandler(unittest.TestCase):
 # _render_tool — error output display
 # ---------------------------------------------------------------------------
 
+
 class TestRenderToolErrorOutput(unittest.TestCase):
     def test_error_tool_shows_output(self):
-        tool = {"name": "Bash", "status": "error", "duration_ms": 50,
-                "input": {"command": "exit 1"}, "output": "command failed"}
+        tool = {
+            "name": "Bash",
+            "status": "error",
+            "duration_ms": 50,
+            "input": {"command": "exit 1"},
+            "output": "command failed",
+        }
         result = _render_tool(tool)
         self.assertIn("command failed", result)
 
     def test_success_tool_hides_output(self):
-        tool = {"name": "Bash", "status": "success", "duration_ms": 50,
-                "input": {"command": "ls"}, "output": "file1\nfile2"}
+        tool = {
+            "name": "Bash",
+            "status": "success",
+            "duration_ms": 50,
+            "input": {"command": "ls"},
+            "output": "file1\nfile2",
+        }
         result = _render_tool(tool)
         self.assertNotIn("file1", result)
 
     def test_error_output_truncated_at_500(self):
-        tool = {"name": "Bash", "status": "error", "duration_ms": 50,
-                "input": {}, "output": "E" * 1000}
+        tool = {
+            "name": "Bash",
+            "status": "error",
+            "duration_ms": 50,
+            "input": {},
+            "output": "E" * 1000,
+        }
         result = _render_tool(tool)
         # Error output shown but capped at 500 chars
         self.assertIn("E" * 500, result)
         # The 501st char should not appear in the output quote
-        lines_with_output = [l for l in result.split("\n") if l.startswith(">")]
+        lines_with_output = [line for line in result.split("\n") if line.startswith(">")]
         combined = "".join(lines_with_output)
         self.assertLessEqual(len(combined), 510)  # "> " prefix + 500 chars
 
@@ -377,23 +404,30 @@ class TestRenderToolErrorOutput(unittest.TestCase):
 # _summarize_input — edit preview limit
 # ---------------------------------------------------------------------------
 
+
 class TestEditPreviewLimit(unittest.TestCase):
     def test_edit_old_string_truncated_at_200(self):
-        result = _summarize_input("Edit", {
-            "file_path": "/a.py",
-            "old_string": "O" * 500,
-            "new_string": "N" * 500,
-        })
+        result = _summarize_input(
+            "Edit",
+            {
+                "file_path": "/a.py",
+                "old_string": "O" * 500,
+                "new_string": "N" * 500,
+            },
+        )
         # old_string should be truncated to 200 chars
         self.assertIn("O" * 200, result)
         self.assertNotIn("O" * 201, result)
 
     def test_edit_new_string_truncated_at_200(self):
-        result = _summarize_input("Edit", {
-            "file_path": "/a.py",
-            "old_string": "old",
-            "new_string": "N" * 500,
-        })
+        result = _summarize_input(
+            "Edit",
+            {
+                "file_path": "/a.py",
+                "old_string": "old",
+                "new_string": "N" * 500,
+            },
+        )
         self.assertIn("N" * 200, result)
         self.assertNotIn("N" * 201, result)
 

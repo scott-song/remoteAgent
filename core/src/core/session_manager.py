@@ -11,14 +11,17 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .config import core_settings
+from .logging_config import get_logger
 
 SESSION_TIMEOUT = core_settings.session_timeout_hours * 60 * 60
 _CLEANUP_INTERVAL = 300
 _MAX_HISTORY_PER_PROJECT = 10
 HISTORY_FILE = Path.home() / ".claude-workspace" / "sessions.json"
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -26,7 +29,7 @@ class Session:
     user_id: str
     bot_name: str
     project_dir: Path
-    client: object  # ClaudeSDKClient
+    client: Any  # ClaudeSDKClient
     connected: bool = False
     created_at: float = field(default_factory=time.time)
     last_active: float = field(default_factory=time.time)
@@ -70,7 +73,7 @@ class SessionManager:
             try:
                 await session.client.disconnect()
             except Exception as e:
-                print(f"  [Session] Disconnect error: {e}")
+                logger.warning(f"[Session] Disconnect error: {e}")
             session.connected = False
 
     async def cleanup_stale(self):
@@ -80,7 +83,7 @@ class SessionManager:
         self._last_cleanup = now
         stale = [s for s in self._sessions.values() if s.is_stale()]
         for s in stale:
-            print(f"  [Session] Cleaning stale: {s.key}")
+            logger.info(f"[Session] Cleaning stale: {s.key}")
             await self.close(s.user_id, s.bot_name)
 
     def all_sessions(self) -> list[Session]:
@@ -111,12 +114,15 @@ class SessionManager:
                 break
 
         if not found:
-            entries.insert(0, {
-                "session_id": session.session_id,
-                "summary": (session.first_prompt or "(new session)")[:50],
-                "last_active": datetime.now().isoformat(),
-                "project_dir": str(session.project_dir),
-            })
+            entries.insert(
+                0,
+                {
+                    "session_id": session.session_id,
+                    "summary": (session.first_prompt or "(new session)")[:50],
+                    "last_active": datetime.now().isoformat(),
+                    "project_dir": str(session.project_dir),
+                },
+            )
 
         # Cap history
         self._history[key] = entries[:_MAX_HISTORY_PER_PROJECT]

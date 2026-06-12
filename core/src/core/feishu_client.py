@@ -24,6 +24,9 @@ from lark_oapi.api.im.v1 import (
     ReplyMessageRequestBody,
 )
 
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Feishu interactive card limit is ~28KB; leave margin for JSON overhead
 CARD_MAX_BYTES = 25_000
@@ -42,12 +45,14 @@ def build_action_buttons(has_code_changes: bool = True) -> str:
     """
     buttons = []
     if has_code_changes:
-        buttons.extend([
-            "✅ `/commit`",
-            "🧪 `/test`",
-            "📋 `/diff`",
-            "↩️ `/undo`",
-        ])
+        buttons.extend(
+            [
+                "✅ `/commit`",
+                "🧪 `/test`",
+                "📋 `/diff`",
+                "↩️ `/undo`",
+            ]
+        )
     buttons.append("📝 `/continue`")
     return "  ".join(buttons)
 
@@ -118,9 +123,11 @@ class FeishuClient:
 
             # Bypass proxy issues
             import os
+
             os.environ.setdefault("no_proxy", "*")
 
             import requests as _req
+
             _no_proxy_session = _req.Session()
             _no_proxy_session.trust_env = False
             ws_module.requests = _no_proxy_session
@@ -130,7 +137,7 @@ class FeishuClient:
         thread = threading.Thread(target=_run_ws, daemon=True)
         thread.start()
 
-        print(f"  [Feishu] WebSocket connecting (app: {self.app_id[:8]}...)")
+        logger.info(f"[Feishu] WebSocket connecting (app: {self.app_id[:8]}...)")
         return thread
 
     def _on_event(self, data) -> None:
@@ -167,14 +174,15 @@ class FeishuClient:
             chat_id = message.chat_id
             sender_name = sender_id  # Feishu doesn't give username in the event easily
 
-            print(f"\n[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: {text}")
+            logger.info(f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: {text}")
 
             if self._on_message_callback:
                 self._on_message_callback(chat_id, sender_id, sender_name, text, message_id)
 
         except Exception as e:
-            print(f"[Feishu] Error handling message: {e}")
+            logger.error(f"[Feishu] Error handling message: {e}")
             import traceback
+
             traceback.print_exc()
 
     # ── Send / Update Messages ────────────────────────────
@@ -245,11 +253,13 @@ class FeishuClient:
             response = self.lark_client.im.v1.message.reply(request)
             if response.success():
                 break
-            print(f"  [Feishu] Reply failed (attempt {attempt + 1}): {response.code} - {response.msg}")
+            logger.warning(
+                f"[Feishu] Reply failed (attempt {attempt + 1}): {response.code} - {response.msg}"
+            )
             if attempt < UPDATE_MAX_RETRIES:
                 time.sleep(UPDATE_RETRY_DELAY)
 
-        if not response.success():
+        if not (response and response.success()):
             self._reply_plain(message_id, text[:4000])
             return
 
@@ -274,7 +284,10 @@ class FeishuClient:
             response = self.lark_client.im.v1.message.reply(request)
             if response.success():
                 return
-            print(f"  [Feishu] Plain reply failed (attempt {attempt + 1}): {response.code} - {response.msg}")
+            logger.warning(
+                f"[Feishu] Plain reply failed (attempt {attempt + 1}): "
+                f"{response.code} - {response.msg}"
+            )
             if attempt < UPDATE_MAX_RETRIES:
                 time.sleep(UPDATE_RETRY_DELAY)
 
@@ -304,10 +317,13 @@ class FeishuClient:
                 response = self.lark_client.im.v1.message.create(request)
                 if response.success():
                     break
-                print(f"  [Feishu] Send failed (attempt {attempt + 1}): {response.code} - {response.msg}")
+                logger.warning(
+                    f"[Feishu] Send failed (attempt {attempt + 1}): "
+                    f"{response.code} - {response.msg}"
+                )
                 if attempt < UPDATE_MAX_RETRIES:
                     time.sleep(UPDATE_RETRY_DELAY)
-            if not response.success():
+            if not (response and response.success()):
                 if i == 0:
                     return ""
                 continue
@@ -337,16 +353,14 @@ class FeishuClient:
             request = (
                 PatchMessageRequest.builder()
                 .message_id(message_id)
-                .request_body(
-                    PatchMessageRequestBody.builder()
-                    .content(card_content)
-                    .build()
-                )
+                .request_body(PatchMessageRequestBody.builder().content(card_content).build())
                 .build()
             )
             response = self.lark_client.im.v1.message.patch(request)
             if response.success():
                 return
-            print(f"  [Feishu] Update failed (attempt {attempt + 1}): {response.code} - {response.msg}")
+            logger.warning(
+                f"[Feishu] Update failed (attempt {attempt + 1}): {response.code} - {response.msg}"
+            )
             if attempt < UPDATE_MAX_RETRIES:
                 time.sleep(UPDATE_RETRY_DELAY)

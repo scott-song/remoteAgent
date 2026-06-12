@@ -34,7 +34,7 @@ class HRBot:
         loop = asyncio.new_event_loop()
         threading.Thread(target=loop.run_forever, daemon=True).start()
 
-        print(f"\nHR Bot")
+        print("\nHR Bot")
         print(f"  Feishu app: {core_settings.feishu_app_id[:8]}...")
         self.feishu.start(loop)
         print("Listening for messages. Press Ctrl+C to stop.\n")
@@ -44,7 +44,9 @@ class HRBot:
         except KeyboardInterrupt:
             print("\nShutting down...")
 
-    def _on_message(self, chat_id: str, sender_id: str, sender_name: str, text: str, message_id: str):
+    def _on_message(
+        self, chat_id: str, sender_id: str, sender_name: str, text: str, message_id: str
+    ):
         print(f"\n[Message] {sender_id[:8]}...: {text}")
 
         if text.strip().lower() in ("help", "/help", "hi", "hello"):

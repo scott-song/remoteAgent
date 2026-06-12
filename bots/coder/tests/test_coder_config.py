@@ -1,4 +1,5 @@
 """Tests for coder.config module."""
+
 from pathlib import Path
 
 

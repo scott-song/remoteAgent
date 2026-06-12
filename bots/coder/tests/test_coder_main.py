@@ -8,25 +8,27 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from coder.main import (
-    ClaudeWorkspaceBot,
     HELP_TEXT,
-    MODE_ALIASES,
-    MODE_DISPLAY,
-    NO_PROJECT_MSG,
+    ClaudeWorkspaceBot,
     _read_first_line,
     main,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_project(name="proj1", project_dir="/tmp/proj1", model="sonnet",
-                permission_mode="acceptEdits", github_url=None,
-                feishu_chat_ids=None, auto_git=False):
+
+def _make_project(
+    name="proj1",
+    project_dir="/tmp/proj1",
+    model="sonnet",
+    permission_mode="acceptEdits",
+    github_url=None,
+    feishu_chat_ids=None,
+    auto_git=False,
+):
     """Create a lightweight project-like object."""
     return SimpleNamespace(
         name=name,
@@ -42,6 +44,7 @@ def _make_project(name="proj1", project_dir="/tmp/proj1", model="sonnet",
 
 class AsyncIterHelper:
     """Async iterator wrapper for a list."""
+
     def __init__(self, items):
         self._items = items
         self._idx = 0
@@ -59,17 +62,25 @@ class AsyncIterHelper:
 
 def _make_async_receive(items):
     """Create an async function that returns an async iterator."""
+
     async def _receive():
         return AsyncIterHelper(items)
+
     # We need receive_response to directly return the async iterable (not a coroutine)
     # The source code does: async for msg in session.client.receive_response()
     # So receive_response() must return an async iterable
     return MagicMock(return_value=AsyncIterHelper(items))
 
 
-def _make_session(user_id="user1", bot_name="proj1", locked=False,
-                  permission_mode="acceptEdits", session_id=None,
-                  first_prompt=None, connected=True):
+def _make_session(
+    user_id="user1",
+    bot_name="proj1",
+    locked=False,
+    permission_mode="acceptEdits",
+    session_id=None,
+    first_prompt=None,
+    connected=True,
+):
     """Create a mock Session with an asyncio lock."""
     session = MagicMock()
     session.user_id = user_id
@@ -98,27 +109,33 @@ class TextBlock:
     def __init__(self, text):
         self.text = text
 
+
 class ToolUseBlock:
     def __init__(self, name, input=None):
         self.name = name
         self.input = input or {}
+
 
 class ToolResultBlock:
     def __init__(self, content, is_error=False):
         self.content = content
         self.is_error = is_error
 
+
 class AssistantMessage:
     def __init__(self, content):
         self.content = content
+
 
 class UserMessage:
     def __init__(self, content):
         self.content = content
 
+
 class SystemMessage:
     def __init__(self, data):
         self.data = data
+
 
 class ResultMessage:
     def __init__(self, session_id=None):
@@ -129,17 +146,20 @@ class ResultMessage:
 # Bot fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def bot():
-    with patch('coder.main.ProjectRegistry') as mock_registry_cls, \
-         patch('coder.main.SessionManager') as mock_sessions_cls, \
-         patch('coder.main.FeishuClient') as mock_feishu_cls, \
-         patch('coder.main.core_settings') as mock_core_settings, \
-         patch('coder.main.coder_settings') as mock_coder_settings, \
-         patch('coder.main.threading'):
-        mock_coder_settings.projects_dir = '/tmp/projects'
-        mock_core_settings.feishu_app_id = 'test_id'
-        mock_core_settings.feishu_app_secret = 'test_secret'
+    with (
+        patch("coder.main.ProjectRegistry") as mock_registry_cls,
+        patch("coder.main.SessionManager") as mock_sessions_cls,
+        patch("coder.main.FeishuClient") as mock_feishu_cls,
+        patch("coder.main.core_settings") as mock_core_settings,
+        patch("coder.main.coder_settings") as mock_coder_settings,
+        patch("coder.main.threading"),
+    ):
+        mock_coder_settings.projects_dir = "/tmp/projects"
+        mock_core_settings.feishu_app_id = "test_id"
+        mock_core_settings.feishu_app_secret = "test_secret"
         mock_core_settings.stream_update_interval = 1.5
         b = ClaudeWorkspaceBot()
         b.registry = mock_registry_cls.return_value
@@ -153,6 +173,7 @@ def bot():
 # ---------------------------------------------------------------------------
 # _read_first_line
 # ---------------------------------------------------------------------------
+
 
 class TestReadFirstLine:
     def test_normal_file(self, tmp_path):
@@ -179,9 +200,10 @@ class TestReadFirstLine:
 # _on_message routing
 # ---------------------------------------------------------------------------
 
+
 class TestOnMessage:
     def test_command_routes_to_handle_command(self, bot):
-        with patch.object(bot, '_handle_command') as mock_cmd:
+        with patch.object(bot, "_handle_command") as mock_cmd:
             bot._on_message("chat1", "user1", "User", "/help", "msg1")
             mock_cmd.assert_called_once_with("/help", "chat1", "user1", "msg1")
 
@@ -198,12 +220,12 @@ class TestOnMessage:
         bot.feishu.reply.assert_called_once_with("msg1", HELP_TEXT)
 
     def test_regular_text_sends_processing(self, bot):
-        with patch.object(bot, '_schedule'):
+        with patch.object(bot, "_schedule"):
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "\u23f3 Processing...")
 
     def test_regular_text_schedules_prompt(self, bot):
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             mock_sched.assert_called_once()
 
@@ -211,6 +233,7 @@ class TestOnMessage:
 # ---------------------------------------------------------------------------
 # _handle_command dispatch
 # ---------------------------------------------------------------------------
+
 
 class TestHandleCommand:
     def test_help(self, bot):
@@ -265,7 +288,7 @@ class TestHandleCommand:
         session = _make_session()
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
         bot.sessions.get.return_value = session
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/mode plan", "chat1", "user1", "msg1")
             mock_sched.assert_called_once()
 
@@ -288,7 +311,7 @@ class TestHandleCommand:
 
     def test_new_resets_session(self, bot):
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/new", "chat1", "user1", "msg1")
             mock_sched.assert_called_once()
 
@@ -296,7 +319,7 @@ class TestHandleCommand:
         session = _make_session(locked=True)
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
         bot.sessions.get.return_value = session
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/stop", "chat1", "user1", "msg1")
             mock_sched.assert_called_once()
 
@@ -319,6 +342,7 @@ class TestHandleCommand:
 # ---------------------------------------------------------------------------
 # _resolve_project
 # ---------------------------------------------------------------------------
+
 
 class TestResolveProject:
     def test_returns_project_from_chat_binding(self, bot):
@@ -351,26 +375,35 @@ class TestResolveProject:
 # Project management commands
 # ---------------------------------------------------------------------------
 
+
 class TestProjectManagement:
     def test_addproject_valid(self, bot):
         bot.registry.add.return_value = _make_project("newproj", "/tmp/newproj")
         bot._handle_command("/addproject newproj /tmp/newproj", "chat1", "user1", "msg1")
         bot.registry.add.assert_called_once_with(
-            name="newproj", project_dir="/tmp/newproj",
-            chat_id=None, github_url=None,
+            name="newproj",
+            project_dir="/tmp/newproj",
+            chat_id=None,
+            github_url=None,
         )
         reply_text = bot.feishu.reply.call_args[0][1]
         assert "newproj" in reply_text
 
     def test_addproject_with_bind_and_github(self, bot):
-        bot.registry.add.return_value = _make_project("proj", "/tmp/proj", github_url="https://github.com/u/r")
+        bot.registry.add.return_value = _make_project(
+            "proj", "/tmp/proj", github_url="https://github.com/u/r"
+        )
         bot._handle_command(
             "/addproject proj /tmp/proj --github https://github.com/u/r --bind",
-            "chat1", "user1", "msg1",
+            "chat1",
+            "user1",
+            "msg1",
         )
         bot.registry.add.assert_called_once_with(
-            name="proj", project_dir="/tmp/proj",
-            chat_id="chat1", github_url="https://github.com/u/r",
+            name="proj",
+            project_dir="/tmp/proj",
+            chat_id="chat1",
+            github_url="https://github.com/u/r",
         )
         reply_text = bot.feishu.reply.call_args[0][1]
         assert "Bound" in reply_text
@@ -443,6 +476,7 @@ class TestProjectManagement:
 # Resume commands
 # ---------------------------------------------------------------------------
 
+
 class TestResume:
     def test_resume_no_arg_lists_history(self, bot):
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
@@ -457,9 +491,13 @@ class TestResume:
     def test_resume_with_number(self, bot):
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
         bot.sessions.get_history.return_value = [
-            {"session_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "last_active": "2025-01-01T12:00:00", "summary": "task"},
+            {
+                "session_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "last_active": "2025-01-01T12:00:00",
+                "summary": "task",
+            },
         ]
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/resume 1", "chat1", "user1", "msg1")
             # Should reply with resuming message
             bot.feishu.reply.assert_called_once()
@@ -470,7 +508,7 @@ class TestResume:
     def test_resume_with_uuid(self, bot):
         bot.registry.get_by_chat_id.return_value = _make_project("proj1")
         uuid = "12345678-1234-1234-1234-123456789abc"
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command(f"/resume {uuid}", "chat1", "user1", "msg1")
             bot.feishu.reply.assert_called_once()
             reply_text = bot.feishu.reply.call_args[0][1]
@@ -507,6 +545,7 @@ class TestResume:
 # _handle_prompt (async)
 # ---------------------------------------------------------------------------
 
+
 class TestHandlePrompt:
     @pytest.mark.asyncio
     async def test_no_project_sends_error(self, bot):
@@ -535,9 +574,11 @@ class TestHandlePrompt:
         mock_client.query = AsyncMock()
         mock_client.receive_response = _make_async_receive([])
 
-        with patch('coder.main.create_claude_client', return_value=mock_client), \
-             patch('coder.main.StreamHandler') as mock_sh_cls, \
-             patch('coder.main.Session') as mock_session_cls:
+        with (
+            patch("coder.main.create_claude_client", return_value=mock_client),
+            patch("coder.main.StreamHandler"),
+            patch("coder.main.Session") as mock_session_cls,
+        ):
             mock_session = _make_session()
             mock_session.first_prompt = None
             mock_session.client = mock_client
@@ -561,7 +602,7 @@ class TestHandlePrompt:
         bot.sessions.save_to_history = MagicMock()
         bot.feishu.send_message.return_value = "sent_msg_id"
 
-        with patch('coder.main.StreamHandler'):
+        with patch("coder.main.StreamHandler"):
             await bot._handle_prompt("test", "chat1", "user1", "msg1")
 
         # Should NOT call create_claude_client since session exists
@@ -575,7 +616,7 @@ class TestHandlePrompt:
         bot.sessions.get.return_value = None
         bot.sessions.cleanup_stale = AsyncMock()
 
-        with patch('coder.main.create_claude_client', side_effect=Exception("connect failed")):
+        with patch("coder.main.create_claude_client", side_effect=Exception("connect failed")):
             await bot._handle_prompt("test", "chat1", "user1", "msg1")
 
         bot.feishu.send_message.assert_called()
@@ -596,10 +637,12 @@ class TestHandlePrompt:
         mock_client.query = AsyncMock()
         mock_client.receive_response = _make_async_receive([])
 
-        with patch('coder.main.create_claude_client', return_value=mock_client), \
-             patch('coder.main.sync_repo') as mock_sync, \
-             patch('coder.main.StreamHandler'), \
-             patch('coder.main.Session') as mock_session_cls:
+        with (
+            patch("coder.main.create_claude_client", return_value=mock_client),
+            patch("coder.main.sync_repo") as mock_sync,
+            patch("coder.main.StreamHandler"),
+            patch("coder.main.Session") as mock_session_cls,
+        ):
             mock_session = _make_session()
             mock_session.first_prompt = None
             mock_session.client = mock_client
@@ -615,6 +658,7 @@ class TestHandlePrompt:
 # _stream_response (async)
 # ---------------------------------------------------------------------------
 
+
 class TestStreamResponse:
     @pytest.mark.asyncio
     async def test_text_blocks_forwarded(self, bot):
@@ -625,7 +669,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -640,7 +684,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -655,7 +699,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -670,7 +714,7 @@ class TestStreamResponse:
         session.client.receive_response = _make_async_receive([msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_sh_cls.return_value = MagicMock()
             await bot._stream_response("chat1", session, "test")
             assert session.session_id == "new-session-id"
@@ -683,12 +727,10 @@ class TestStreamResponse:
         extra_msg = AssistantMessage([TextBlock("should not see")])
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive(
-            [assist_msg, result_msg, extra_msg]
-        )
+        session.client.receive_response = _make_async_receive([assist_msg, result_msg, extra_msg])
         bot.feishu.send_message.return_value = "msg_id"
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_sh_cls.return_value = mock_streamer
             await bot._stream_response("chat1", session, "test")
@@ -702,7 +744,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_sh_cls.return_value = MagicMock()
             await bot._stream_response("chat1", session, "test")
 
@@ -717,7 +759,7 @@ class TestStreamResponse:
         session = _make_session()
         bot.feishu.send_message.return_value = ""
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             await bot._stream_response("chat1", session, "test")
             mock_sh_cls.assert_not_called()
             session.client.query.assert_not_called()
@@ -732,7 +774,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_streamer.response_text = "Here is the partial answer"
             mock_sh_cls.return_value = mock_streamer
@@ -751,7 +793,7 @@ class TestStreamResponse:
         bot.feishu.send_message.return_value = "msg_id"
         bot.sessions.close = AsyncMock()
 
-        with patch('coder.main.StreamHandler') as mock_sh_cls:
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
             mock_streamer = MagicMock()
             mock_streamer.response_text = ""
             mock_sh_cls.return_value = mock_streamer
@@ -765,6 +807,7 @@ class TestStreamResponse:
 # ---------------------------------------------------------------------------
 # _cmd_stop (async)
 # ---------------------------------------------------------------------------
+
 
 class TestCmdStop:
     @pytest.mark.asyncio
@@ -799,6 +842,7 @@ class TestCmdStop:
 # _cmd_new (async)
 # ---------------------------------------------------------------------------
 
+
 class TestCmdNew:
     @pytest.mark.asyncio
     async def test_new_resets(self, bot):
@@ -814,6 +858,7 @@ class TestCmdNew:
 # ---------------------------------------------------------------------------
 # _switch_mode (async)
 # ---------------------------------------------------------------------------
+
 
 class TestSwitchMode:
     @pytest.mark.asyncio
@@ -838,6 +883,7 @@ class TestSwitchMode:
 # ---------------------------------------------------------------------------
 # Skills commands
 # ---------------------------------------------------------------------------
+
 
 class TestSkills:
     def test_skills_no_project(self, bot):
@@ -915,7 +961,7 @@ class TestSkills:
     def test_skill_valid_schedules_prompt(self, bot):
         project = _make_project("proj1")
         bot.registry.get_by_chat_id.return_value = project
-        with patch.object(bot, '_schedule') as mock_sched:
+        with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/skill deploy", "chat1", "user1", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "⏳ Processing...")
             mock_sched.assert_called_once()
@@ -925,9 +971,10 @@ class TestSkills:
 # main() function
 # ---------------------------------------------------------------------------
 
+
 class TestMain:
     def test_main_calls_start(self):
-        with patch('coder.main.ClaudeWorkspaceBot') as mock_cls:
+        with patch("coder.main.ClaudeWorkspaceBot") as mock_cls:
             mock_bot = MagicMock()
             mock_cls.return_value = mock_bot
             main()

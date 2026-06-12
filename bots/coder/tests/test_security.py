@@ -1,14 +1,12 @@
 """Tests for the security module."""
 
 import pytest
-
 from coder.security import (
-    extract_commands,
-    _validate_paths,
-    make_bash_security_hook,
     BASE_ALLOWED_COMMANDS,
+    _validate_paths,
+    extract_commands,
+    make_bash_security_hook,
 )
-
 
 # ── extract_commands tests (existing) ─────────────────────────────────────
 
@@ -168,7 +166,9 @@ async def test_hook_path_restriction_blocks_outside():
 @pytest.mark.asyncio
 async def test_hook_path_restriction_allows_inside():
     hook = make_bash_security_hook(ALLOWED, PROJECT_DIR)
-    result = await hook({"tool_name": "Bash", "tool_input": {"command": f"cat {PROJECT_DIR}/README.md"}})
+    result = await hook(
+        {"tool_name": "Bash", "tool_input": {"command": f"cat {PROJECT_DIR}/README.md"}}
+    )
     assert result == {}
 
 

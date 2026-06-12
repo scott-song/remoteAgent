@@ -6,24 +6,28 @@ from __future__ import annotations
 
 import asyncio
 import re
-import traceback
 import threading
 import time
 
 from core.config import core_settings
 from core.feishu_client import FeishuClient, build_action_buttons
+from core.logging_config import get_logger, setup_logging
 from core.session_manager import Session, SessionManager
 from core.stream_handler import StreamHandler
 
 from .config import coder_settings
+from .git_sync import commit_and_push, sync_repo
 from .project_registry import ProjectRegistry
-from .git_sync import sync_repo, commit_and_push
 from .sdk_client import create_claude_client
+
+logger = get_logger(__name__)
 
 MODE_ALIASES = {"plan": "plan", "ask": "default", "auto": "acceptEdits"}
 MODE_DISPLAY = {v: k for k, v in MODE_ALIASES.items()}
 NO_PROJECT_MSG = "No project selected.\nUse `/bind <name>` or `/project <name>` first."
-_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 _GREETINGS = {"hello", "hi", "hey", "help", "start", "你好"}
 
 HELP_TEXT = (
@@ -50,7 +54,9 @@ class ClaudeWorkspaceBot:
     def __init__(self):
         self.registry = ProjectRegistry(projects_dir=coder_settings.projects_dir)
         self.sessions = SessionManager()
-        self.feishu = FeishuClient(app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret)
+        self.feishu = FeishuClient(
+            app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret
+        )
         self.feishu.on_message(self._on_message)
         self._user_projects: dict[str, str] = {}
         self.loop = asyncio.new_event_loop()
@@ -62,19 +68,19 @@ class ClaudeWorkspaceBot:
     def start(self):
         projects = self.registry.list_projects()
         if not projects:
-            print("\nNo projects configured. Add YAML files to projects/")
+            logger.warning("No projects configured. Add YAML files to projects/")
             return
-        print(f"\nClaude Workspace Bot")
-        print(f"  Feishu app: {core_settings.feishu_app_id[:8]}...")
-        print(f"  Projects: {', '.join(p.name for p in projects)}")
-        print(f"  Default: {projects[0].name} → {projects[0].project_dir}\n")
+        logger.info("Claude Workspace Bot")
+        logger.info(f"  Feishu app: {core_settings.feishu_app_id[:8]}...")
+        logger.info(f"  Projects: {', '.join(p.name for p in projects)}")
+        logger.info(f"  Default: {projects[0].name} → {projects[0].project_dir}")
         self.feishu.start(self.loop)
-        print("Listening for messages. Press Ctrl+C to stop.\n")
+        logger.info("Listening for messages. Press Ctrl+C to stop.")
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("\nShutting down...")
+            logger.info("Shutting down...")
             for s in self.sessions.all_sessions():
                 try:
                     asyncio.run_coroutine_threadsafe(
@@ -85,8 +91,10 @@ class ClaudeWorkspaceBot:
 
     # ── Message routing ──────────────────────────────────
 
-    def _on_message(self, chat_id: str, sender_id: str, _sender_name: str, text: str, message_id: str):
-        print(f"\n[Message] {sender_id[:8]}...: {text}")
+    def _on_message(
+        self, chat_id: str, sender_id: str, _sender_name: str, text: str, message_id: str
+    ):
+        logger.info(f"[Message] {sender_id[:8]}...: {text}")
 
         if text.startswith("/"):
             self._handle_command(text, chat_id, sender_id, message_id)
@@ -118,17 +126,30 @@ class ClaudeWorkspaceBot:
             "/unbind": lambda: self._cmd_unbind(chat_id, message_id),
             # Quick action commands (shown as tappable buttons on response cards)
             "/commit": lambda: self._schedule(self._cmd_commit(sender_id, chat_id, message_id)),
-            "/test": lambda: self._quick_action("Run the test suite and report the results.", chat_id, sender_id, message_id),
-            "/diff": lambda: self._quick_action("Show a git diff of all uncommitted changes.", chat_id, sender_id, message_id),
-            "/undo": lambda: self._quick_action("Undo the last file change you made. Use git checkout or restore to revert it.", chat_id, sender_id, message_id),
-            "/continue": lambda: self._quick_action("Continue with the next step.", chat_id, sender_id, message_id),
+            "/test": lambda: self._quick_action(
+                "Run the test suite and report the results.", chat_id, sender_id, message_id
+            ),
+            "/diff": lambda: self._quick_action(
+                "Show a git diff of all uncommitted changes.", chat_id, sender_id, message_id
+            ),
+            "/undo": lambda: self._quick_action(
+                "Undo the last file change you made. Use git checkout or restore to revert it.",
+                chat_id,
+                sender_id,
+                message_id,
+            ),
+            "/continue": lambda: self._quick_action(
+                "Continue with the next step.", chat_id, sender_id, message_id
+            ),
         }
 
         handler = commands.get(cmd)
         if handler:
             handler()
         else:
-            self.feishu.reply(message_id, f"Unknown command: `{cmd}`\nType /help for available commands.")
+            self.feishu.reply(
+                message_id, f"Unknown command: `{cmd}`\nType /help for available commands."
+            )
 
     # ── Project resolution ────────────────────────────────
 
@@ -171,7 +192,9 @@ class ClaudeWorkspaceBot:
     def _cmd_projects(self, sender_id: str, chat_id: str, message_id: str):
         projects = self.registry.list_projects()
         if not projects:
-            self.feishu.reply(message_id, "No projects.\nUse `/addproject <name> <path>` to add one.")
+            self.feishu.reply(
+                message_id, "No projects.\nUse `/addproject <name> <path>` to add one."
+            )
             return
         current = self._resolve_project(sender_id, chat_id)
         lines = ["**Projects:**\n"]
@@ -257,7 +280,10 @@ class ClaudeWorkspaceBot:
                 if f.name != "SKILL.md":
                     skills.append((f.stem, _read_first_line(f)))
         if not skills:
-            self.feishu.reply(message_id, f"**{project_name}** has no skills.\nAdd: `{skills_dir}/<name>/SKILL.md`")
+            self.feishu.reply(
+                message_id,
+                f"**{project_name}** has no skills.\nAdd: `{skills_dir}/<name>/SKILL.md`",
+            )
             return
         lines = [f"**Skills for {project_name}:**\n"]
         for name, desc in skills:
@@ -273,7 +299,9 @@ class ClaudeWorkspaceBot:
             self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
         self.feishu.reply(message_id, "⏳ Processing...")
-        self._schedule(self._handle_prompt(f"Invoke the skill: {name}", chat_id, sender_id, message_id))
+        self._schedule(
+            self._handle_prompt(f"Invoke the skill: {name}", chat_id, sender_id, message_id)
+        )
 
     # ── Resume ───────────────────────────────────────────
 
@@ -286,14 +314,18 @@ class ClaudeWorkspaceBot:
         if arg is None:
             history = self.sessions.get_history(sender_id, project_name)
             if not history:
-                self.feishu.reply(message_id, f"No recent sessions for `{project_name}`.\nPaste a session ID: `/resume <uuid>`")
+                self.feishu.reply(
+                    message_id,
+                    f"No recent sessions for `{project_name}`.\n"
+                    "Paste a session ID: `/resume <uuid>`",
+                )
                 return
             lines = [f"**Recent sessions for {project_name}:**\n"]
             for i, entry in enumerate(history, 1):
                 ts = entry.get("last_active", "?")[:16].replace("T", " ")
                 summary = entry.get("summary", "?")
                 lines.append(f"`{i}.` [{ts}] {summary}")
-            lines.append(f"\nResume: `/resume <number>` or `/resume <uuid>`")
+            lines.append("\nResume: `/resume <number>` or `/resume <uuid>`")
             self.feishu.reply(message_id, "\n".join(lines))
             return
 
@@ -326,24 +358,30 @@ class ClaudeWorkspaceBot:
         if project.github_url:
             try:
                 status = sync_repo(project.project_dir, project.github_url)
-                print(f"  [Git] {project_name}: {status}")
+                logger.info(f"[Git] {project_name}: {status}")
             except Exception as e:
-                print(f"  [Git] {project_name}: sync failed: {e}")
+                logger.error(f"[Git] {project_name}: sync failed: {e}")
 
         try:
             client = create_claude_client(project, resume=session_id)
             session = Session(
-                user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
-                client=client, permission_mode=project.permission_mode,
+                user_id=sender_id,
+                bot_name=project_name,
+                project_dir=project.project_dir,
+                client=client,
+                permission_mode=project.permission_mode,
                 session_id=session_id,
             )
             await client.connect()
             session.connected = True
             self.sessions.store(session)
-            self.feishu.send_message(chat_id, f"**Session resumed** (`{session_id[:8]}...`)\nProject: `{project_name}`\n\nYou can continue the conversation.")
+            self.feishu.send_message(
+                chat_id,
+                f"**Session resumed** (`{session_id[:8]}...`)\n"
+                f"Project: `{project_name}`\n\nYou can continue the conversation.",
+            )
         except Exception as e:
-            print(f"  [Resume] Failed: {e}")
-            traceback.print_exc()
+            logger.error(f"[Resume] Failed: {e}", exc_info=True)
             self.feishu.send_message(chat_id, f"Failed to resume: {e}")
 
     # ── Project management ───────────────────────────────
@@ -351,10 +389,13 @@ class ClaudeWorkspaceBot:
     def _cmd_add_project(self, text: str, chat_id: str, message_id: str):
         parts = text.split()
         if len(parts) < 3:
-            self.feishu.reply(message_id,
+            self.feishu.reply(
+                message_id,
                 "Usage: `/addproject <name> <path>`\n"
                 "Options: `--bind` `--github <url>`\n"
-                "Example: `/addproject my-app /home/dev/my-app --github https://github.com/user/repo --bind`")
+                "Example: `/addproject my-app /home/dev/my-app "
+                "--github https://github.com/user/repo --bind`",
+            )
             return
         name, path = parts[1], parts[2]
         bind = "--bind" in parts
@@ -365,7 +406,12 @@ class ClaudeWorkspaceBot:
                 github_url = parts[idx + 1]
 
         try:
-            project = self.registry.add(name=name, project_dir=path, chat_id=chat_id if bind else None, github_url=github_url)
+            self.registry.add(
+                name=name,
+                project_dir=path,
+                chat_id=chat_id if bind else None,
+                github_url=github_url,
+            )
             msg = f"**Added:** `{name}` → `{path}`"
             if github_url:
                 msg += f"\nGit: `{github_url}`"
@@ -379,13 +425,18 @@ class ClaudeWorkspaceBot:
         if not name:
             self.feishu.reply(message_id, "Usage: `/removeproject <name>`")
             return
-        self.feishu.reply(message_id, f"Removed `{name}`." if self.registry.remove(name) else f"Not found: `{name}`")
+        self.feishu.reply(
+            message_id,
+            f"Removed `{name}`." if self.registry.remove(name) else f"Not found: `{name}`",
+        )
 
     def _cmd_bind(self, name: str | None, chat_id: str, message_id: str):
         if not name:
             project = self.registry.get_by_chat_id(chat_id)
             if project:
-                self.feishu.reply(message_id, f"Bound to `{project.name}` (`{project.project_dir}`)")
+                self.feishu.reply(
+                    message_id, f"Bound to `{project.name}` (`{project.project_dir}`)"
+                )
             else:
                 names = ", ".join(f"`{p.name}`" for p in self.registry.list_projects())
                 self.feishu.reply(message_id, f"Not bound.\n`/bind <name>`\nAvailable: {names}")
@@ -417,42 +468,55 @@ class ClaudeWorkspaceBot:
             if project.github_url:
                 try:
                     status = sync_repo(project.project_dir, project.github_url)
-                    print(f"  [Git] {project_name}: {status}")
+                    logger.info(f"[Git] {project_name}: {status}")
                 except Exception as e:
-                    print(f"  [Git] {project_name}: sync failed: {e}")
+                    logger.error(f"[Git] {project_name}: sync failed: {e}")
 
             # Auto-resume: pick up the last session for this user+project
             last_sid = self.sessions.get_last_session_id(sender_id, project_name)
 
             try:
                 if last_sid:
-                    print(f"  [Session] Auto-resuming {last_sid[:8]}... for {sender_id[:8]}:{project_name}")
+                    logger.info(
+                        f"[Session] Auto-resuming {last_sid[:8]}... "
+                        f"for {sender_id[:8]}:{project_name}"
+                    )
                     client = create_claude_client(project, resume=last_sid)
                 else:
                     client = create_claude_client(project)
 
-                session = Session(user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
-                                  client=client, permission_mode=project.permission_mode,
-                                  session_id=last_sid)
+                session = Session(
+                    user_id=sender_id,
+                    bot_name=project_name,
+                    project_dir=project.project_dir,
+                    client=client,
+                    permission_mode=project.permission_mode,
+                    session_id=last_sid,
+                )
                 await client.connect()
                 session.connected = True
                 self.sessions.store(session)
                 if last_sid:
-                    print(f"  [Session] Auto-resumed {session.key}")
+                    logger.info(f"[Session] Auto-resumed {session.key}")
                 else:
-                    print(f"  [Session] Created {session.key}")
+                    logger.info(f"[Session] Created {session.key}")
             except Exception as e:
                 # If auto-resume fails, fall back to a fresh session
                 if last_sid:
-                    print(f"  [Session] Auto-resume failed, starting fresh: {e}")
+                    logger.warning(f"[Session] Auto-resume failed, starting fresh: {e}")
                     try:
                         client = create_claude_client(project)
-                        session = Session(user_id=sender_id, bot_name=project_name, project_dir=project.project_dir,
-                                          client=client, permission_mode=project.permission_mode)
+                        session = Session(
+                            user_id=sender_id,
+                            bot_name=project_name,
+                            project_dir=project.project_dir,
+                            client=client,
+                            permission_mode=project.permission_mode,
+                        )
                         await client.connect()
                         session.connected = True
                         self.sessions.store(session)
-                        print(f"  [Session] Created fresh {session.key}")
+                        logger.info(f"[Session] Created fresh {session.key}")
                     except Exception as e2:
                         self.feishu.send_message(chat_id, f"Failed to create session: {e2}")
                         return
@@ -470,14 +534,16 @@ class ClaudeWorkspaceBot:
         start = time.time()
         msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
         if not msg_id:
-            print("  [Feishu] Placeholder message failed, retrying...")
+            logger.warning("[Feishu] Placeholder message failed, retrying...")
             msg_id = self.feishu.send_message(chat_id, "⏳ Thinking...")
             if not msg_id:
-                print("  [Feishu] Placeholder failed twice — cannot stream response")
+                logger.error("[Feishu] Placeholder failed twice — cannot stream response")
                 self.feishu.send_message(chat_id, "❌ Failed to start response. Please try again.")
                 return
 
-        streamer = StreamHandler(self.feishu, chat_id, msg_id, session.bot_name, core_settings.stream_update_interval)
+        streamer = StreamHandler(
+            self.feishu, chat_id, msg_id, session.bot_name, core_settings.stream_update_interval
+        )
 
         try:
             await session.client.query(text)
@@ -490,15 +556,18 @@ class ClaudeWorkspaceBot:
                         bt = type(block).__name__
                         if bt == "TextBlock" and hasattr(block, "text"):
                             streamer.on_text(block.text)
-                            print(block.text, end="", flush=True)
+                            logger.debug(block.text)
                         elif bt == "ToolUseBlock" and hasattr(block, "name"):
                             streamer.on_tool_start(block.name, getattr(block, "input", {}) or {})
-                            print(f"\n[Tool: {block.name}]", flush=True)
+                            logger.debug(f"[Tool: {block.name}]")
 
                 elif msg_type == "UserMessage" and hasattr(msg, "content"):
                     for block in msg.content:
                         if type(block).__name__ == "ToolResultBlock":
-                            streamer.on_tool_result(str(getattr(block, "content", "")), getattr(block, "is_error", False))
+                            streamer.on_tool_result(
+                                str(getattr(block, "content", "")),
+                                getattr(block, "is_error", False),
+                            )
 
                 elif msg_type == "SystemMessage":
                     if hasattr(msg, "data") and isinstance(msg.data, dict):
@@ -516,8 +585,12 @@ class ClaudeWorkspaceBot:
 
             duration = f"{time.time() - start:.0f}s"
             buttons_text = build_action_buttons(has_code_changes=streamer.has_code_changes())
-            streamer.finalize(duration, MODE_DISPLAY.get(session.permission_mode, session.permission_mode), buttons_text=buttons_text)
-            print(f"\n  [Done] {duration}")
+            streamer.finalize(
+                duration,
+                MODE_DISPLAY.get(session.permission_mode, session.permission_mode),
+                buttons_text=buttons_text,
+            )
+            logger.info(f"[Done] {duration}")
 
             # Auto git commit & push if enabled
             project = self.registry.get(session.bot_name)
@@ -527,14 +600,13 @@ class ClaudeWorkspaceBot:
                     result = commit_and_push(project.project_dir, f"[claude] {summary[:72]}")
                     if "No changes" not in result:
                         self.feishu.send_message(chat_id, f"**Auto-git:** {result}")
-                    print(f"  [Auto-git] {result}")
+                    logger.info(f"[Auto-git] {result}")
                 except Exception as e:
-                    print(f"  [Auto-git] Failed: {e}")
+                    logger.error(f"[Auto-git] Failed: {e}")
                     self.feishu.send_message(chat_id, f"**Auto-git failed:** {e}")
 
         except Exception as e:
-            print(f"  [Error] {session.key}: {e}")
-            traceback.print_exc()
+            logger.error(f"[Error] {session.key}: {e}", exc_info=True)
             error_msg = f"❌ Error: {e}"
             partial = getattr(streamer, "response_text", "") or ""
             if isinstance(partial, str) and partial.strip():
@@ -553,9 +625,8 @@ def _read_first_line(path) -> str:
 
 
 def main():
-    print("=" * 50)
-    print("  Claude Workspace Bot (Feishu)")
-    print("=" * 50)
+    setup_logging()
+    logger.info("Claude Workspace Bot (Feishu) starting")
     ClaudeWorkspaceBot().start()
 
 

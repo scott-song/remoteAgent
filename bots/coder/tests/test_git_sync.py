@@ -6,9 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from coder.git_sync import _clone, _pull, sync_repo
-
 
 # ---------------------------------------------------------------------------
 # sync_repo
@@ -98,7 +96,6 @@ class TestClone:
 
 
 class TestPull:
-
     @patch("coder.git_sync.subprocess.run")
     def test_success_with_new_changes(self, mock_run, tmp_path: Path):
         mock_run.return_value = MagicMock(
@@ -118,9 +115,7 @@ class TestPull:
 
     @patch("coder.git_sync.subprocess.run")
     def test_already_up_to_date(self, mock_run, tmp_path: Path):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="Already up to date.\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="Already up to date.\n", stderr="")
         result = _pull(tmp_path)
         assert result == "Already up to date"
 

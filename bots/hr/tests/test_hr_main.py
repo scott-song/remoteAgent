@@ -1,17 +1,20 @@
 """Tests for hr.main module."""
-from unittest.mock import MagicMock, patch
+
+from unittest.mock import patch
 
 
 class TestHRBot:
     def test_creates_bot(self):
         with patch("hr.main.FeishuClient"):
             from hr.main import HRBot
+
             bot = HRBot()
             assert bot.feishu is not None
 
     def test_help_command(self):
         with patch("hr.main.FeishuClient") as mock_cls:
-            from hr.main import HRBot, HELP_TEXT
+            from hr.main import HELP_TEXT, HRBot
+
             bot = HRBot()
             bot.feishu = mock_cls.return_value
             bot._on_message("chat1", "user1", "User", "/help", "msg1")
@@ -20,6 +23,7 @@ class TestHRBot:
     def test_unknown_message(self):
         with patch("hr.main.FeishuClient") as mock_cls:
             from hr.main import HRBot
+
             bot = HRBot()
             bot.feishu = mock_cls.return_value
             bot._on_message("chat1", "user1", "User", "book a meeting", "msg1")

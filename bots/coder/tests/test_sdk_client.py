@@ -4,12 +4,9 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from coder.project_registry import ProjectConfig
-from coder.security import BASE_ALLOWED_COMMANDS
 from coder.sdk_client import _load_project_mcp_servers, create_claude_client
-
+from coder.security import BASE_ALLOWED_COMMANDS
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,9 +44,13 @@ class TestLoadProjectMcpServers:
     def test_global_mcp_servers_returned(self, tmp_path):
         """Global mcpServers in config are returned."""
         config_file = tmp_path / ".claude.json"
-        config_file.write_text(json.dumps({
-            "mcpServers": {"server-a": {"command": "a"}},
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {"server-a": {"command": "a"}},
+                }
+            )
+        )
         with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(tmp_path / "proj")
         assert result == {"server-a": {"command": "a"}}
@@ -59,20 +60,24 @@ class TestLoadProjectMcpServers:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
         config_file = tmp_path / ".claude.json"
-        config_file.write_text(json.dumps({
-            "mcpServers": {
-                "shared": {"command": "global-cmd"},
-                "global-only": {"command": "g"},
-            },
-            "projects": {
-                str(project_dir.resolve()): {
+        config_file.write_text(
+            json.dumps(
+                {
                     "mcpServers": {
-                        "shared": {"command": "project-cmd"},
-                        "proj-only": {"command": "p"},
+                        "shared": {"command": "global-cmd"},
+                        "global-only": {"command": "g"},
                     },
-                },
-            },
-        }))
+                    "projects": {
+                        str(project_dir.resolve()): {
+                            "mcpServers": {
+                                "shared": {"command": "project-cmd"},
+                                "proj-only": {"command": "p"},
+                            },
+                        },
+                    },
+                }
+            )
+        )
         with patch("coder.sdk_client.CLAUDE_CONFIG_FILE", config_file):
             result = _load_project_mcp_servers(project_dir)
         assert result["shared"] == {"command": "project-cmd"}
@@ -114,36 +119,28 @@ class TestCreateClaudeClient:
         assert kwargs["cwd"] == str(project.project_dir.resolve())
         MockClient.assert_called_once()
 
-    def test_system_prompt_passed_when_set(
-        self, MockOptions, MockClient, mock_mcp, tmp_path
-    ):
+    def test_system_prompt_passed_when_set(self, MockOptions, MockClient, mock_mcp, tmp_path):
         project = make_project(tmp_path, system_prompt="Be helpful.")
         create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["system_prompt"] == "Be helpful."
 
-    def test_system_prompt_absent_when_none(
-        self, MockOptions, MockClient, mock_mcp, tmp_path
-    ):
+    def test_system_prompt_absent_when_none(self, MockOptions, MockClient, mock_mcp, tmp_path):
         project = make_project(tmp_path, system_prompt=None)
         create_claude_client(project)
 
         kwargs = MockOptions.call_args[1]
         assert "system_prompt" not in kwargs
 
-    def test_resume_session_id_passed(
-        self, MockOptions, MockClient, mock_mcp, tmp_path
-    ):
+    def test_resume_session_id_passed(self, MockOptions, MockClient, mock_mcp, tmp_path):
         project = make_project(tmp_path)
         create_claude_client(project, resume="sess-123")
 
         kwargs = MockOptions.call_args[1]
         assert kwargs["resume"] == "sess-123"
 
-    def test_resume_absent_when_none(
-        self, MockOptions, MockClient, mock_mcp, tmp_path
-    ):
+    def test_resume_absent_when_none(self, MockOptions, MockClient, mock_mcp, tmp_path):
         project = make_project(tmp_path)
         create_claude_client(project, resume=None)
 
@@ -199,9 +196,7 @@ class TestCreateClaudeClient:
         assert kwargs["mcp_servers"]["proj-srv"] == {"command": "p"}
         assert kwargs["mcp_servers"]["agent-srv"] == {"command": "a"}
 
-    def test_writes_claude_settings_json(
-        self, MockOptions, MockClient, mock_mcp, tmp_path
-    ):
+    def test_writes_claude_settings_json(self, MockOptions, MockClient, mock_mcp, tmp_path):
         project = make_project(tmp_path)
         create_claude_client(project)
 

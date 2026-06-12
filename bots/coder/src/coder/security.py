@@ -10,26 +10,82 @@ import shlex
 from typing import Optional
 
 BASE_ALLOWED_COMMANDS = {
-    "ls", "cat", "head", "tail", "wc", "grep", "echo", "printf",
-    "cp", "mv", "rm", "mkdir", "touch", "chmod",
-    "pwd", "cd",
-    "npm", "pnpm", "npx", "node",
-    "python", "python3",
-    "git", "gh",
-    "ps", "lsof", "sleep", "find", "pkill", "kill",
-    "true", "false", "test", "[", "which", "export", "env",
-    "readlink", "basename", "dirname",
-    "sed", "awk", "sort", "uniq", "tr", "cut", "tee",
-    "curl", "xargs", "date",
-    "docker", "docker-compose",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "echo",
+    "printf",
+    "cp",
+    "mv",
+    "rm",
+    "mkdir",
+    "touch",
+    "chmod",
+    "pwd",
+    "cd",
+    "npm",
+    "pnpm",
+    "npx",
+    "node",
+    "python",
+    "python3",
+    "git",
+    "gh",
+    "ps",
+    "lsof",
+    "sleep",
+    "find",
+    "pkill",
+    "kill",
+    "true",
+    "false",
+    "test",
+    "[",
+    "which",
+    "export",
+    "env",
+    "readlink",
+    "basename",
+    "dirname",
+    "sed",
+    "awk",
+    "sort",
+    "uniq",
+    "tr",
+    "cut",
+    "tee",
+    "curl",
+    "xargs",
+    "date",
+    "docker",
+    "docker-compose",
 }
 
 _SEMICOLON_RE = re.compile(r'(?<!\\)(?<!["\'])\s*;\s*(?!["\'])')
 
-_SHELL_KEYWORDS = frozenset({
-    "if", "then", "else", "elif", "fi", "for", "while",
-    "until", "do", "done", "case", "esac", "in", "!", "{", "}",
-})
+_SHELL_KEYWORDS = frozenset(
+    {
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "case",
+        "esac",
+        "in",
+        "!",
+        "{",
+        "}",
+    }
+)
 
 
 def extract_commands(command_string: str) -> list[str]:
@@ -120,14 +176,23 @@ def _validate_paths(command_string: str, project_dir: str) -> tuple[bool, str]:
         if token.startswith("-") or ("=" in token and not token.startswith("=")):
             continue
 
-        is_path = token.startswith("/") or token.startswith("./") or token.startswith("../") or ".." in token
+        is_path = (
+            token.startswith("/")
+            or token.startswith("./")
+            or token.startswith("../")
+            or ".." in token
+        )
         if not is_path:
             continue
         if any(token.startswith(p) for p in _ALLOWED_PATH_PREFIXES):
             continue
 
-        resolved = os.path.realpath(token if os.path.isabs(token) else os.path.join(project_dir, token))
-        if resolved == project_dir_normalized.rstrip("/") or resolved.startswith(project_dir_normalized):
+        resolved = os.path.realpath(
+            token if os.path.isabs(token) else os.path.join(project_dir, token)
+        )
+        if resolved == project_dir_normalized.rstrip("/") or resolved.startswith(
+            project_dir_normalized
+        ):
             continue
 
         return False, f"Path '{token}' resolves outside project directory"

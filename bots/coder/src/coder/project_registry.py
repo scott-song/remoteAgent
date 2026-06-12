@@ -9,8 +9,11 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from core.logging_config import get_logger
 
 DEFAULT_MODEL = "claude-opus-4-6"
+
+logger = get_logger(__name__)
 
 
 def _to_list(val) -> list:
@@ -54,7 +57,7 @@ class ProjectRegistry:
                 if raw:
                     self._register(raw)
             except Exception as e:
-                print(f"  [Projects] Error loading {yaml_file.name}: {e}")
+                logger.error(f"[Projects] Error loading {yaml_file.name}: {e}")
 
     def _register(self, raw: dict) -> ProjectConfig:
         config = ProjectConfig(
@@ -78,7 +81,7 @@ class ProjectRegistry:
         for chat_id in config.feishu_chat_ids:
             self._chat_id_map[chat_id] = config.name
         chat_info = f" (chats: {len(config.feishu_chat_ids)})" if config.feishu_chat_ids else ""
-        print(f"  [Projects] {config.name} → {config.project_dir} ({config.model}){chat_info}")
+        logger.info(f"[Projects] {config.name} → {config.project_dir} ({config.model}){chat_info}")
         return config
 
     def reload(self):
@@ -97,15 +100,26 @@ class ProjectRegistry:
     def list_projects(self) -> list[ProjectConfig]:
         return list(self.projects.values())
 
-    def add(self, name: str, project_dir: str, chat_id: Optional[str] = None,
-            model: str = DEFAULT_MODEL, github_url: Optional[str] = None) -> ProjectConfig:
+    def add(
+        self,
+        name: str,
+        project_dir: str,
+        chat_id: Optional[str] = None,
+        model: str = DEFAULT_MODEL,
+        github_url: Optional[str] = None,
+    ) -> ProjectConfig:
         if name in self.projects:
             raise ValueError(f"Project '{name}' already exists")
         raw = {
-            "name": name, "project_dir": project_dir, "display_name": name,
-            "description": f"Project: {project_dir}", "model": model,
-            "permission_mode": "acceptEdits", "setting_sources": ["user", "project"],
-            "restricted": True, "feishu_chat_ids": [chat_id] if chat_id else [],
+            "name": name,
+            "project_dir": project_dir,
+            "display_name": name,
+            "description": f"Project: {project_dir}",
+            "model": model,
+            "permission_mode": "acceptEdits",
+            "setting_sources": ["user", "project"],
+            "restricted": True,
+            "feishu_chat_ids": [chat_id] if chat_id else [],
         }
         if github_url:
             raw["github_url"] = github_url
@@ -147,10 +161,14 @@ class ProjectRegistry:
 
     def _save_yaml(self, project: ProjectConfig) -> None:
         data = {
-            "name": project.name, "display_name": project.display_name,
-            "description": project.description, "project_dir": str(project.project_dir),
-            "model": project.model, "permission_mode": project.permission_mode,
-            "setting_sources": project.setting_sources, "restricted": project.restricted,
+            "name": project.name,
+            "display_name": project.display_name,
+            "description": project.description,
+            "project_dir": str(project.project_dir),
+            "model": project.model,
+            "permission_mode": project.permission_mode,
+            "setting_sources": project.setting_sources,
+            "restricted": project.restricted,
         }
         if project.system_prompt:
             data["system_prompt"] = project.system_prompt

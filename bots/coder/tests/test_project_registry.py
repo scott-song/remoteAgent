@@ -2,15 +2,14 @@
 
 from pathlib import Path
 
-import yaml
 import pytest
-
-from coder.project_registry import ProjectConfig, ProjectRegistry, DEFAULT_MODEL, _to_list
-
+import yaml
+from coder.project_registry import DEFAULT_MODEL, ProjectConfig, ProjectRegistry, _to_list
 
 # ---------------------------------------------------------------------------
 # _to_list
 # ---------------------------------------------------------------------------
+
 
 class TestToList:
     def test_string_returns_list(self):
@@ -30,6 +29,7 @@ class TestToList:
 # ---------------------------------------------------------------------------
 # ProjectConfig dataclass defaults
 # ---------------------------------------------------------------------------
+
 
 class TestProjectConfig:
     def test_defaults(self):
@@ -51,6 +51,7 @@ class TestProjectConfig:
 # ---------------------------------------------------------------------------
 # ProjectRegistry
 # ---------------------------------------------------------------------------
+
 
 def _write_yaml(path: Path, data: dict) -> None:
     with open(path, "w") as f:
@@ -270,7 +271,9 @@ class TestSaveYamlOptionalFields:
         assert data["mcp_servers"] == servers
 
     def test_github_url_persisted(self, tmp_path):
-        _write_yaml(tmp_path / "gh.yaml", _minimal_raw(name="gh", github_url="https://github.com/x/y"))
+        _write_yaml(
+            tmp_path / "gh.yaml", _minimal_raw(name="gh", github_url="https://github.com/x/y")
+        )
         reg = ProjectRegistry(tmp_path)
         project = reg.get("gh")
         reg._save_yaml(project)

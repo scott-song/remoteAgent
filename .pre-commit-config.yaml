@@ -1,0 +1,9 @@
+# Pre-commit hooks — run `pre-commit install` (Makefile `setup` does this) to enable.
+# Blocks commits with lint/format violations.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

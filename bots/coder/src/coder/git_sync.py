@@ -21,13 +21,19 @@ def commit_and_push(project_dir: Path, message: str = "Auto-commit by Claude") -
     # Stage all changes
     subprocess.run(
         ["git", "add", "-A"],
-        cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+        cwd=str(project_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
     # Check if there are staged changes
     result = subprocess.run(
         ["git", "diff", "--cached", "--quiet"],
-        cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+        cwd=str(project_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode == 0:
         return "No changes to commit"
@@ -35,7 +41,10 @@ def commit_and_push(project_dir: Path, message: str = "Auto-commit by Claude") -
     # Commit
     result = subprocess.run(
         ["git", "commit", "-m", message],
-        cwd=str(project_dir), capture_output=True, text=True, timeout=60,
+        cwd=str(project_dir),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git commit failed: {result.stderr.strip()}")
@@ -43,7 +52,10 @@ def commit_and_push(project_dir: Path, message: str = "Auto-commit by Claude") -
     # Push
     result = subprocess.run(
         ["git", "push"],
-        cwd=str(project_dir), capture_output=True, text=True, timeout=120,
+        cwd=str(project_dir),
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if result.returncode != 0:
         # Commit succeeded but push failed — not fatal
@@ -71,7 +83,9 @@ def _clone(url: str, target: Path) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         ["git", "clone", url, str(target)],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git clone failed: {result.stderr.strip()}")
@@ -82,7 +96,9 @@ def _pull(project_dir: Path) -> str:
     result = subprocess.run(
         ["git", "pull", "--ff-only"],
         cwd=str(project_dir),
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if result.returncode != 0:
         # Pull failed (e.g., diverged) — not fatal, just warn

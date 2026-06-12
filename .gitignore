@@ -9,5 +9,7 @@ node_modules/
 .DS_Store
 .pytest_cache/
 *.log
+.coverage
+htmlcov/
 bots/coder/projects/*.yaml
 !bots/coder/projects/example-project.yaml

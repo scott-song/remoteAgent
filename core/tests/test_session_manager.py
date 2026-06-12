@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from core.session_manager import Session, SessionManager, _CLEANUP_INTERVAL, _MAX_HISTORY_PER_PROJECT
 import core.session_manager as session_manager
-
+import pytest
+from core.session_manager import (
+    _MAX_HISTORY_PER_PROJECT,
+    Session,
+    SessionManager,
+)
 
 # ── Helpers ──────────────────────────────────────────────
 
