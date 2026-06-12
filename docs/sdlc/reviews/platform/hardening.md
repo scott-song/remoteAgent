@@ -1,6 +1,23 @@
 # Review: platform/hardening
 
-> Reviewer: implementation-reviewer subagent · Date: 2026-06-12 · Verdict: NEEDS CHANGES
+> Reviewer: implementation-reviewer subagent · Date: 2026-06-12 · Verdict: PASS (re-review after Loop-A dev fix `77c566f`)
+
+## Re-review (commit 77c566f) — final verdict: PASS
+
+Loop-A dev fix verified against the prior NEEDS CHANGES findings. Upstream chain still approved and fresh (spec `249915b`, design `35a3ae9`, plan targets both). All four findings resolved:
+
+- **C-1 (Critical, AC-8) — RESOLVED.** `core/src/core/feishu_client.py:182-183` now reads `logger.error(f"[Feishu] Error handling message: {e}", exc_info=True)`; the `traceback.print_exc()` and its local `import traceback` are gone. Repo-wide scan confirms **zero** bare `print()`/`print_exc()` calls in `core/src` or `bots/coder/src`, and no `import traceback` in `core/src`. The traceback now flows through the logging layer under LOG_LEVEL control — exactly AC-8's intent. This was the last bare print-family call in core/.
+- **C-2 (AC-6) — RESOLVED / reconciliation accepted.** `Makefile:27` and the CI `quality` job (`.github/workflows/ci.yml:43`) now `pip install -r requirements.lock` ahead of the editable installs. The matrix `test` job deliberately stays on declared floors, documented in an inline comment (`ci.yml:20-22`): the lockfile is frozen on a single interpreter (3.12) while the matrix's purpose is proving 3.10–3.12 support — pinning it across the matrix would defeat that purpose. The reproducibility check lives in the single-interpreter `quality` job plus `make setup`. Defensible and acceptable.
+- **C-3 (AC-8) — RESOLVED.** `core/tests/test_logging_config.py` (new, 37L) covers the fallback path (`LOG_LEVEL=NOT_A_LEVEL` → root logger stays INFO, no raise), default-to-INFO, explicit `DEBUG`, lowercase `warning`, and `get_logger` naming. Verified against the source: `setup_logging()` calls `setLevel(level)` unconditionally (`logging_config.py:34`), so the `_configured` flag does not mask per-test level changes — the tests genuinely exercise the real branch (`getattr(logging, "NOT_A_LEVEL", None)` → None → `isinstance` guard → `_DEFAULT_LEVEL`). Not vacuous. AC-8's second Given/When/Then is now protected against regression.
+- **C-4 (Suggestion) — RESOLVED.** `bots/coder/src/coder/main.py:421` simplified from `except (ValueError, Exception)` to `except Exception`.
+
+No new findings introduced by the fix diff (`558c2db..77c566f` touches only the four target files plus the new test, the review doc, and the traceability matrix). Local verification reported by dev: ruff PASS, mypy PASS, ruff format PASS, 284 tests pass, coverage 87.54% (above the 85% floor). I could not re-run pytest in the review sandbox (no pytest installed); the static read is conclusive and the reported numbers are consistent with the diff.
+
+**Verdict: PASS.** All 10 ACs now have implementation evidence and AC-8's previously-untested fallback clause is covered. Design fidelity remains strong (no redesign, no behavior change to messaging/sessions). Ready to advance to `/sdlc-test platform/hardening` (Tester records the tooling-execution ACs — AC-1/2/3/4/5/6/7/10 — as *Non-functional, verified via tooling execution*).
+
+---
+
+## Original review (NEEDS CHANGES)
 
 ## Summary
 
