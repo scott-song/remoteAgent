@@ -12,5 +12,16 @@
       "mcp__postgres__*",
       "mcp__sentry__*"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "ai-sdlc-c1-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "scott-song/ai-sdlc"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ai-sdlc-c1@ai-sdlc-c1-marketplace": true
   }
 }
