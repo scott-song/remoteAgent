@@ -7,7 +7,10 @@
       "Edit(./**)",
       "Glob(./**)",
       "Grep(./**)",
-      "Bash(*)"
+      "Bash(*)",
+      "mcp__postgres__*",
+      "mcp__github__*",
+      "mcp__sentry__*"
     ]
   }
 }

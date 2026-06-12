@@ -8,7 +8,9 @@
       "WebFetch(*)",
       "WebSearch(*)",
       "Agent(*)",
-      "mcp__*"
+      "mcp__github__*",
+      "mcp__postgres__*",
+      "mcp__sentry__*"
     ]
   }
 }
