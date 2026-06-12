@@ -30,14 +30,12 @@ A Python bot that bridges Feishu to Claude Agent SDK. One bot, multiple projects
 
 ```bash
 git clone https://github.com/scott-song/remoteAgent.git
-cd remoteAgent/bot
-python3 -m venv .venv
-source .venv/bin/activate
-pip install lark-oapi requests pyyaml python-dotenv claude-agent-sdk
+cd remoteAgent
+make setup   # creates .venv and installs core + bots (editable, with dev extras)
 ```
 
 ```bash
-cp ../.env.example ../.env
+cp .env.example .env
 # Edit .env with your Feishu app credentials:
 #   FEISHU_APP_ID=cli_xxxx
 #   FEISHU_APP_SECRET=xxxx
@@ -46,8 +44,7 @@ cp ../.env.example ../.env
 ### Run
 
 ```bash
-cd bot
-.venv/bin/python -m bot.main
+make run-coder   # or: .venv/bin/python -m coder.main
 ```
 
 ### Add a project (from Feishu)
@@ -83,19 +80,25 @@ Or just send a message — it goes to Claude directly.
 Feishu (phone/desktop)
   │ WebSocket (outbound)
   ▼
-Bot Service (Python)
-  ├── feishu_client.py    — Feishu WebSocket + REST
-  ├── agent_registry.py   — project configs (YAML)
-  ├── session_manager.py  — per-user Claude sessions
-  ├── stream_handler.py   — streaming tool calls to cards
-  ├── sdk_client.py       — Claude Agent SDK factory
-  ├── security.py         — command allowlist
-  └── git_sync.py         — clone/pull before work
+Bot process (Python monorepo)
+  ├── core/                    — shared library
+  │   ├── feishu_client.py     — Feishu WebSocket + REST
+  │   ├── session_manager.py   — per-(user, project) Claude sessions
+  │   └── stream_handler.py    — streaming tool calls to cards
+  └── bots/coder/              — the coder bot
+      ├── main.py              — message routing & commands
+      ├── project_registry.py  — project configs (YAML)
+      ├── sdk_client.py        — Claude Agent SDK factory
+      ├── security.py          — bash allowlist + path restriction
+      └── git_sync.py          — clone/pull before work
   │
   ▼
-Claude Agent SDK → Claude API
+Claude Agent SDK → Claude
   (uses your CLI subscription)
 ```
+
+> Architecture decisions are recorded in [`docs/adrs/`](docs/adrs/); the SDLC
+> working docs live under [`docs/sdlc/`](docs/sdlc/).
 
 ## License
 
