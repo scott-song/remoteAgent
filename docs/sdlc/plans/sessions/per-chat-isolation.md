@@ -11,21 +11,21 @@ Three tasks, sequential (each leaves the suite green). Add `chat_id` to the sess
 ## Tasks
 
 ### T1 — Add chat_id to the session layer
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `core/src/core/session_manager.py`
 - **Design**: § `session_manager.py`
 - **Covers**: AC-3, AC-5, AC-6
 - **Notes**: `Session.chat_id` field + 3-part `key`; `get`/`close` take `chat_id`; `_history_key`/`get_history`/`get_last_session_id` gain a chat segment; `save_to_history` uses `session.chat_id`; `cleanup_stale` closes with `s.chat_id`; remove the legacy `bot_name`-only fallback in `get_history`.
 
 ### T2 — Propagate chat_id through coder call sites
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `bots/coder/src/coder/main.py`, `bots/coder/src/coder/commands.py`
 - **Design**: § `main.py` and `commands.py`
 - **Covers**: AC-1, AC-2, AC-4
 - **Notes**: pass `chat_id` to every `sessions.get/close/get_history/get_last_session_id`; add `chat_id=chat_id` to every `Session(...)`; shutdown loop and `_stream_response` error path use `session.chat_id`.
 
 ### T3 — Update and extend tests
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Files**: `core/tests/test_session_manager.py`, `bots/coder/tests/test_coder_main.py`
 - **Design**: § Cross-cutting (Tests)
 - **Covers**: AC-1, AC-2, AC-3, AC-4, AC-5

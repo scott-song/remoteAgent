@@ -110,7 +110,7 @@ class CommandsMixin:
             self.feishu.reply(message_id, "Usage: `/mode [plan|auto|ask]`")
             return
         project_name = self._resolve_project(sender_id, chat_id)
-        session = self.sessions.get(sender_id, project_name)
+        session = self.sessions.get(sender_id, project_name, chat_id)
         if not session:
             self.feishu.reply(message_id, "No active session. Send a message first.")
             return
@@ -126,13 +126,13 @@ class CommandsMixin:
 
     async def _cmd_new(self, sender_id: str, chat_id: str, message_id: str):
         project_name = self._resolve_project(sender_id, chat_id)
-        await self.sessions.close(sender_id, project_name)
+        await self.sessions.close(sender_id, project_name, chat_id)
         self.registry.reload()
         self.feishu.reply(message_id, "Session reset. (project configs reloaded)")
 
     async def _cmd_stop(self, sender_id: str, chat_id: str, message_id: str):
         project_name = self._resolve_project(sender_id, chat_id)
-        session = self.sessions.get(sender_id, project_name)
+        session = self.sessions.get(sender_id, project_name, chat_id)
         if not session:
             self.feishu.reply(message_id, "No active session.")
             return
@@ -147,7 +147,7 @@ class CommandsMixin:
 
     def _cmd_status(self, sender_id: str, chat_id: str, message_id: str):
         project_name = self._resolve_project(sender_id, chat_id)
-        session = self.sessions.get(sender_id, project_name)
+        session = self.sessions.get(sender_id, project_name, chat_id)
         if not session:
             self.feishu.reply(message_id, "No active session.")
             return
@@ -202,7 +202,7 @@ class CommandsMixin:
             return
 
         if arg is None:
-            history = self.sessions.get_history(sender_id, project_name)
+            history = self.sessions.get_history(sender_id, project_name, chat_id)
             if not history:
                 self.feishu.reply(
                     message_id,
@@ -222,7 +222,7 @@ class CommandsMixin:
         session_id = None
         if arg.isdigit():
             idx = int(arg) - 1
-            history = self.sessions.get_history(sender_id, project_name)
+            history = self.sessions.get_history(sender_id, project_name, chat_id)
             if 0 <= idx < len(history):
                 session_id = history[idx]["session_id"]
             else:

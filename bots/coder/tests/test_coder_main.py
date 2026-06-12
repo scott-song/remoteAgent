@@ -75,6 +75,7 @@ def _make_async_receive(items):
 def _make_session(
     user_id="user1",
     bot_name="proj1",
+    chat_id="chat1",
     locked=False,
     permission_mode="acceptEdits",
     session_id=None,
@@ -85,11 +86,12 @@ def _make_session(
     session = MagicMock()
     session.user_id = user_id
     session.bot_name = bot_name
+    session.chat_id = chat_id
     session.permission_mode = permission_mode
     session.session_id = session_id
     session.first_prompt = first_prompt
     session.connected = connected
-    session.key = f"{user_id}:{bot_name}"
+    session.key = f"{user_id}:{bot_name}:{chat_id}"
     # Use a real asyncio.Lock so `async with session.lock` works
     lock = asyncio.Lock()
     if locked:
@@ -751,7 +753,9 @@ class TestStreamResponse:
         bot.feishu.update_message.assert_called_once()
         error_text = bot.feishu.update_message.call_args[0][1]
         assert "Error" in error_text
-        bot.sessions.close.assert_called_once_with(session.user_id, session.bot_name)
+        bot.sessions.close.assert_called_once_with(
+            session.user_id, session.bot_name, session.chat_id
+        )
 
     @pytest.mark.asyncio
     async def test_returns_early_when_no_msg_id(self, bot):

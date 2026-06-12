@@ -28,6 +28,7 @@ logger = get_logger(__name__)
 class Session:
     user_id: str
     bot_name: str
+    chat_id: str
     project_dir: Path
     client: Any  # ClaudeSDKClient
     connected: bool = False
@@ -40,7 +41,7 @@ class Session:
 
     @property
     def key(self) -> str:
-        return f"{self.user_id}:{self.bot_name}"
+        return f"{self.user_id}:{self.bot_name}:{self.chat_id}"
 
     def is_stale(self) -> bool:
         return (time.time() - self.last_active) > SESSION_TIMEOUT
@@ -55,8 +56,8 @@ class SessionManager:
         self._last_cleanup: float = 0.0
         self._history: dict = self._load_history()
 
-    def get(self, user_id: str, bot_name: str) -> Optional[Session]:
-        key = f"{user_id}:{bot_name}"
+    def get(self, user_id: str, bot_name: str, chat_id: str) -> Optional[Session]:
+        key = f"{user_id}:{bot_name}:{chat_id}"
         session = self._sessions.get(key)
         if session and session.connected:
             session.touch()
@@ -66,8 +67,8 @@ class SessionManager:
     def store(self, session: Session):
         self._sessions[session.key] = session
 
-    async def close(self, user_id: str, bot_name: str):
-        key = f"{user_id}:{bot_name}"
+    async def close(self, user_id: str, bot_name: str, chat_id: str):
+        key = f"{user_id}:{bot_name}:{chat_id}"
         session = self._sessions.pop(key, None)
         if session and session.connected:
             try:
@@ -84,23 +85,23 @@ class SessionManager:
         stale = [s for s in self._sessions.values() if s.is_stale()]
         for s in stale:
             logger.info(f"[Session] Cleaning stale: {s.key}")
-            await self.close(s.user_id, s.bot_name)
+            await self.close(s.user_id, s.bot_name, s.chat_id)
 
     def all_sessions(self) -> list[Session]:
         return list(self._sessions.values())
 
     # ── Session history (persisted to disk) ──────────────
 
-    def _history_key(self, user_id: str, bot_name: str) -> str:
-        """Key for persistent history: user_id::bot_name."""
-        return f"{user_id}::{bot_name}"
+    def _history_key(self, user_id: str, bot_name: str, chat_id: str) -> str:
+        """Key for persistent history: user_id::bot_name::chat_id."""
+        return f"{user_id}::{bot_name}::{chat_id}"
 
     def save_to_history(self, session: Session):
         """Save or update a session entry in persistent history."""
         if not session.session_id:
             return
 
-        key = self._history_key(session.user_id, session.bot_name)
+        key = self._history_key(session.user_id, session.bot_name, session.chat_id)
         entries = self._history.get(key, [])
 
         # Update existing or add new
@@ -128,18 +129,15 @@ class SessionManager:
         self._history[key] = entries[:_MAX_HISTORY_PER_PROJECT]
         self._save_history()
 
-    def get_history(self, user_id: str, bot_name: str) -> list[dict]:
-        """Get recent session history for a user+project, sorted by last_active desc."""
-        key = self._history_key(user_id, bot_name)
+    def get_history(self, user_id: str, bot_name: str, chat_id: str) -> list[dict]:
+        """Get recent session history for a user+project+chat, sorted by last_active desc."""
+        key = self._history_key(user_id, bot_name, chat_id)
         entries = self._history.get(key, [])
-        # Also check legacy entries keyed by bot_name only (migration)
-        if not entries:
-            entries = self._history.get(bot_name, [])
         return sorted(entries, key=lambda e: e.get("last_active", ""), reverse=True)
 
-    def get_last_session_id(self, user_id: str, bot_name: str) -> Optional[str]:
-        """Get the most recent session ID for a user+project (for auto-resume)."""
-        history = self.get_history(user_id, bot_name)
+    def get_last_session_id(self, user_id: str, bot_name: str, chat_id: str) -> Optional[str]:
+        """Get the most recent session ID for a user+project+chat (for auto-resume)."""
+        history = self.get_history(user_id, bot_name, chat_id)
         return history[0]["session_id"] if history else None
 
     def _load_history(self) -> dict:

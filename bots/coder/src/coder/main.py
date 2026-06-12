@@ -60,7 +60,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
             for s in self.sessions.all_sessions():
                 try:
                     asyncio.run_coroutine_threadsafe(
-                        self.sessions.close(s.user_id, s.bot_name), self.loop
+                        self.sessions.close(s.user_id, s.bot_name, s.chat_id), self.loop
                     ).result(timeout=5)
                 except Exception as e:
                     logger.warning(f"[Shutdown] Error closing {s.key}: {e}")
@@ -135,7 +135,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
             self.feishu.send_message(chat_id, "No project configured.")
             return
 
-        session = self.sessions.get(sender_id, project_name)
+        session = self.sessions.get(sender_id, project_name, chat_id)
         summary = (session.first_prompt or "Update") if session else "Update"
 
         try:
@@ -152,7 +152,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
             self.feishu.send_message(chat_id, f"Project `{project_name}` not found.")
             return
 
-        await self.sessions.close(sender_id, project_name)
+        await self.sessions.close(sender_id, project_name, chat_id)
 
         if project.github_url:
             try:
@@ -166,6 +166,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
             session = Session(
                 user_id=sender_id,
                 bot_name=project_name,
+                chat_id=chat_id,
                 project_dir=project.project_dir,
                 client=client,
                 permission_mode=project.permission_mode,
@@ -192,7 +193,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
 
         await self.sessions.cleanup_stale()
 
-        session = self.sessions.get(sender_id, project_name)
+        session = self.sessions.get(sender_id, project_name, chat_id)
         if not session:
             if project.github_url:
                 try:
@@ -202,7 +203,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
                     logger.error(f"[Git] {project_name}: sync failed: {e}")
 
             # Auto-resume: pick up the last session for this user+project
-            last_sid = self.sessions.get_last_session_id(sender_id, project_name)
+            last_sid = self.sessions.get_last_session_id(sender_id, project_name, chat_id)
 
             try:
                 if last_sid:
@@ -217,6 +218,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
                 session = Session(
                     user_id=sender_id,
                     bot_name=project_name,
+                    chat_id=chat_id,
                     project_dir=project.project_dir,
                     client=client,
                     permission_mode=project.permission_mode,
@@ -238,6 +240,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
                         session = Session(
                             user_id=sender_id,
                             bot_name=project_name,
+                            chat_id=chat_id,
                             project_dir=project.project_dir,
                             client=client,
                             permission_mode=project.permission_mode,
@@ -343,7 +346,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
                     partial = partial[:3000] + "\n*(truncated)*"
                 error_msg += f"\n---\n**Partial response before error:**\n{partial}"
             self.feishu.update_message(msg_id, error_msg)
-            await self.sessions.close(session.user_id, session.bot_name)
+            await self.sessions.close(session.user_id, session.bot_name, session.chat_id)
 
 
 def main():
