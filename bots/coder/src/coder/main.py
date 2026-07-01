@@ -8,6 +8,7 @@ message dispatch, and the Claude session-execution / streaming path.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 import time
 
@@ -20,6 +21,7 @@ from core.stream_handler import StreamHandler
 from .commands import _GREETINGS, HELP_TEXT, MODE_DISPLAY, CommandsMixin
 from .config import coder_settings
 from .git_sync import commit_and_push, sync_repo
+from .instance_lock import AlreadyRunningError, acquire_instance_lock, release_instance_lock
 from .project_registry import ProjectRegistry
 from .sdk_client import create_claude_client
 
@@ -352,7 +354,15 @@ class ClaudeWorkspaceBot(CommandsMixin):
 def main():
     setup_logging()
     logger.info("Claude Workspace Bot (Feishu) starting")
-    ClaudeWorkspaceBot().start()
+    try:
+        lock_fd = acquire_instance_lock()
+    except AlreadyRunningError as e:
+        logger.error(str(e))
+        sys.exit(1)
+    try:
+        ClaudeWorkspaceBot().start()
+    finally:
+        release_instance_lock(lock_fd)
 
 
 if __name__ == "__main__":

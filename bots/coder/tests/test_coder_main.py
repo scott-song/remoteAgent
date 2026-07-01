@@ -979,8 +979,39 @@ class TestSkills:
 
 class TestMain:
     def test_main_calls_start(self):
-        with patch("coder.main.ClaudeWorkspaceBot") as mock_cls:
+        with (
+            patch("coder.main.acquire_instance_lock", return_value=7),
+            patch("coder.main.release_instance_lock"),
+            patch("coder.main.ClaudeWorkspaceBot") as mock_cls,
+        ):
             mock_bot = MagicMock()
             mock_cls.return_value = mock_bot
             main()
             mock_bot.start.assert_called_once()
+
+    def test_main_exits_if_already_running(self):
+        from coder.instance_lock import AlreadyRunningError
+
+        with (
+            patch(
+                "coder.main.acquire_instance_lock",
+                side_effect=AlreadyRunningError("999", Path("/x/coder.lock")),
+            ),
+            patch("coder.main.ClaudeWorkspaceBot") as mock_cls,
+        ):
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 1
+            # Must not start a second bot when one is already running.
+            mock_cls.assert_not_called()
+
+    def test_main_releases_lock_after_start(self):
+        with (
+            patch("coder.main.acquire_instance_lock", return_value=7) as mock_acq,
+            patch("coder.main.release_instance_lock") as mock_rel,
+            patch("coder.main.ClaudeWorkspaceBot") as mock_cls,
+        ):
+            mock_cls.return_value = MagicMock()
+            main()
+            mock_acq.assert_called_once()
+            mock_rel.assert_called_once_with(7)
