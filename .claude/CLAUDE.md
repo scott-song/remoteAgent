@@ -31,6 +31,6 @@ Substantive features follow the **ai-sdlc-c1** flow: `/sdlc-spec → /sdlc-desig
 ## Important constraints
 
 - Don't introduce a second chat platform or an inbound web server without an ADR (ADR-0003).
-- Sessions are keyed `(user, project)`, not by chat (ADR-0005).
+- Sessions are keyed `(user, project, chat)` (ADR-0009, which superseded ADR-0005's `(user, project)` key).
 - The bash security hook is **best-effort, not a sandbox** — interpreters are allowed (ADR-0006).
 - Secrets live in a gitignored `.env`; never commit secrets (ADR-0007).

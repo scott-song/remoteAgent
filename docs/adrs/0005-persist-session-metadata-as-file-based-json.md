@@ -1,8 +1,8 @@
 # ADR-0005: Persist session metadata as file-based JSON
 
-**Status:** Accepted (2026-06-12)
+**Status:** Superseded by ADR-0009
 **Supersedes:** —
-**Superseded by:** —
+**Superseded by:** ADR-0009
 
 ## Context
 

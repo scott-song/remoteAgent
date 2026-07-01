@@ -44,7 +44,7 @@
 ## Auth
 
 - Identity provider: Feishu app credentials (`FEISHU_APP_ID` / `FEISHU_APP_SECRET`); Claude via CLI subscription (ADR-0004)
-- Session model: file-persisted Claude `session_id`, keyed per (user, project), with resume (ADR-0005)
+- Session model: file-persisted Claude `session_id`, keyed per (user, project, chat), with resume (ADR-0009, superseding ADR-0005)
 
 ## Other
 
