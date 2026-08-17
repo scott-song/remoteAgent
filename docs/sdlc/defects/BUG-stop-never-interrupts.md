@@ -1,6 +1,6 @@
 # Defect: BUG-stop-never-interrupts — /stop reports "Interrupted." but never interrupts
 
-> Owner: ssong@aaxis.io · Status: in-progress · Last updated: 2026-08-17
+> Owner: ssong@aaxis.io · Status: fixed · Last updated: 2026-08-17
 
 ## Identification
 
@@ -61,11 +61,11 @@
 
 ## Resolution
 
-- **Resolved on**: <pending>
-- **Verified by**: <pending>
-- **Regression run**: <pending>
-- **Review + test**: <pending>
-- **Deployed in**: <pending>
+- **Resolved on**: 2026-08-17
+- **Verified by**: `.venv/bin/python -m pytest bots/coder/tests/test_coder_main.py -k stop_never_interrupts -q` → passed (failed pre-fix: interrupt called but never awaited)
+- **Regression run**: full suite (`make test`) — 299 passed
+- **Review + test**: `/sdlc-review` round 1 approved this fix as-is; round 2 APPROVE overall · E2E pending spec follow-up
+- **Deployed in**: a47fcf2 (branch `bugfix/BUG-responds-to-previous-message`, not yet merged)
 
 ## Prevention (feeds the defect retrospective)
 

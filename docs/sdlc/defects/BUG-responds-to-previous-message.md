@@ -1,6 +1,6 @@
 # Defect: BUG-responds-to-previous-message — bot answers message N with the response to message N−1
 
-> Owner: ssong@aaxis.io · Status: in-progress · Last updated: 2026-08-17
+> Owner: ssong@aaxis.io · Status: fixed · Last updated: 2026-08-17
 
 ## Identification
 
@@ -70,11 +70,11 @@
 
 ## Resolution
 
-- **Resolved on**: <pending>
-- **Verified by**: <pending>
-- **Regression run**: <pending>
-- **Review + test**: <pending>
-- **Deployed in**: <pending>
+- **Resolved on**: 2026-08-17
+- **Verified by**: `.venv/bin/python -m pytest bots/coder/tests/test_coder_main.py -k regression_BUG -q` → 5 passed (all failed pre-fix; two-turn test verified failing at a47fcf2 by the round-2 reviewer with the fix reverted)
+- **Regression run**: full suite (`make test`) — 299 passed; ruff clean; mypy clean on touched files (pre-existing harness.py errors not attributable)
+- **Review + test**: `/sdlc-review` round 1 REQUEST-CHANGES (F-1..F-5) → reworked → round 2 **APPROVE** · `/sdlc-test` E2E reconciliation pending the spec follow-up (no AC exists yet) · traceability n/a (no AC)
+- **Deployed in**: 085769f (branch `bugfix/BUG-responds-to-previous-message`, not yet merged)
 
 ## Prevention (feeds the defect retrospective)
 
