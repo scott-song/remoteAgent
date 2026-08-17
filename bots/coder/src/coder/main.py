@@ -282,38 +282,41 @@ class ClaudeWorkspaceBot(CommandsMixin):
         try:
             await session.client.query(text)
 
-            # The SDK multiplexes every session sharing the CLI process onto one
-            # stream (e.g. agent-teams teammates). A foreign session's messages
-            # must neither render into this turn's card nor end this turn, or
-            # every later turn shows the previous turn's buffered response
-            # (BUG-responds-to-previous-message).
+            # The SDK multiplexes every session sharing the CLI process onto
+            # one stream (e.g. agent-teams teammates), and the SDK's own
+            # receive_response() terminates on the first ResultMessage of ANY
+            # origin — which is what shifted every turn one response behind
+            # (BUG-responds-to-previous-message). Consume receive_messages()
+            # instead and end the turn only on this session's own result.
             turn_sid = session.session_id
-            saw_turn_sid = False
 
-            async for msg in session.client.receive_response():
+            async for msg in session.client.receive_messages():
                 msg_type = type(msg).__name__
 
                 if msg_type == "SystemMessage":
                     data = msg.data if isinstance(getattr(msg, "data", None), dict) else {}
                     sid = data.get("session_id")
-                    if sid and not saw_turn_sid:
-                        # The turn's first system message is this session's own
-                        # init — authoritative even if the CLI rotated the id.
+                    if sid and turn_sid is None and getattr(msg, "subtype", None) == "init":
+                        # Only a session with no known id yet (a just-connected
+                        # client, before anything foreign can share its stream)
+                        # adopts the init's id; it is that client's own init.
                         turn_sid = sid
                         session.session_id = sid
-                        saw_turn_sid = True
                     if sid and turn_sid and sid != turn_sid:
                         continue
                     if mode := data.get("permission_mode"):
                         session.permission_mode = mode
                     continue
 
+                # UserMessage (tool results) carries no session_id in the SDK,
+                # so it cannot be origin-filtered; with turn_sid unknown the
+                # filter is disabled entirely (pre-fix fail-open behavior).
                 msg_sid = getattr(msg, "session_id", None)
                 if msg_sid and turn_sid and msg_sid != turn_sid:
                     if msg_type == "ResultMessage":
                         logger.warning(
                             f"[Stream] Ignoring foreign ResultMessage "
-                            f"({msg_sid[:8]}...) for {session.key}"
+                            f"({msg_sid[:8]}... != {turn_sid[:8]}...) for {session.key}"
                         )
                     continue
 
