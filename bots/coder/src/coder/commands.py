@@ -70,11 +70,27 @@ class CommandsMixin:
         projects = self.registry.list_projects()
         return projects[0].name if projects else ""
 
+    def _prompt_ack(self, sender_id: str, chat_id: str) -> str:
+        """Acknowledgment for an incoming prompt — honest about queueing.
+
+        A message that arrives while this session's turn is running waits on
+        `Session.lock`; acking it as in-progress makes the previous turn's
+        late answer look like a reply to it (BUG-queued-message-acked-as-processing).
+        """
+        project_name = self._resolve_project(sender_id, chat_id)
+        session = self.sessions.get(sender_id, project_name, chat_id) if project_name else None
+        if session and session.lock.locked():
+            return (
+                "⏳ Still working on your previous message — this one is queued. "
+                "Send /stop to interrupt."
+            )
+        return "⏳ Processing..."
+
     # ── Quick actions (tappable from response cards) ─────
 
     def _quick_action(self, prompt: str, chat_id: str, sender_id: str, message_id: str):
         """Send a predefined prompt to the active session."""
-        self.feishu.reply(message_id, "⏳ Processing...")
+        self.feishu.reply(message_id, self._prompt_ack(sender_id, chat_id))
         self._schedule(self._handle_prompt(prompt, chat_id, sender_id, message_id))
 
     # ── Chat commands ────────────────────────────────────
@@ -140,7 +156,7 @@ class CommandsMixin:
             self.feishu.reply(message_id, "Nothing running.")
             return
         try:
-            session.client.interrupt()
+            await session.client.interrupt()
             self.feishu.reply(message_id, "Interrupted.")
         except Exception as e:
             self.feishu.reply(message_id, f"Interrupt failed: {e}")
@@ -188,7 +204,7 @@ class CommandsMixin:
         if not self._resolve_project(sender_id, chat_id):
             self.feishu.reply(message_id, NO_PROJECT_MSG)
             return
-        self.feishu.reply(message_id, "⏳ Processing...")
+        self.feishu.reply(message_id, self._prompt_ack(sender_id, chat_id))
         self._schedule(
             self._handle_prompt(f"Invoke the skill: {name}", chat_id, sender_id, message_id)
         )

@@ -42,34 +42,44 @@ def _make_project(
     )
 
 
-class AsyncIterHelper:
-    """Async iterator wrapper for a list."""
+class FakeMessageStream:
+    """SDK-faithful fake of the client's message stream.
+
+    Mirrors claude-agent-sdk semantics: one shared buffer whose read position
+    persists across calls (leftovers from one call surface in the next), and
+    ``receive_response()`` terminates after the first ResultMessage of ANY
+    origin — exactly like the real generator. ``receive_messages()`` streams
+    without self-terminating.
+    """
 
     def __init__(self, items):
-        self._items = items
-        self._idx = 0
+        self._items = list(items)
+        self._pos = 0
 
-    def __aiter__(self):
-        return self
+    def extend(self, items):
+        self._items.extend(items)
 
-    async def __anext__(self):
-        if self._idx >= len(self._items):
-            raise StopAsyncIteration
-        item = self._items[self._idx]
-        self._idx += 1
-        return item
+    async def _iter(self, stop_after_result):
+        while self._pos < len(self._items):
+            item = self._items[self._pos]
+            self._pos += 1
+            yield item
+            if stop_after_result and type(item).__name__ == "ResultMessage":
+                return
+
+    def receive_messages(self):
+        return self._iter(stop_after_result=False)
+
+    def receive_response(self):
+        return self._iter(stop_after_result=True)
 
 
-def _make_async_receive(items):
-    """Create an async function that returns an async iterator."""
-
-    async def _receive():
-        return AsyncIterHelper(items)
-
-    # We need receive_response to directly return the async iterable (not a coroutine)
-    # The source code does: async for msg in session.client.receive_response()
-    # So receive_response() must return an async iterable
-    return MagicMock(return_value=AsyncIterHelper(items))
+def _wire_stream(client, items):
+    """Attach an SDK-faithful message stream to a fake client."""
+    stream = FakeMessageStream(items)
+    client.receive_messages = stream.receive_messages
+    client.receive_response = stream.receive_response
+    return stream
 
 
 def _make_session(
@@ -99,8 +109,8 @@ def _make_session(
     session.lock = lock
     session.client = MagicMock()
     session.client.query = AsyncMock()
-    session.client.receive_response = _make_async_receive([])
-    session.client.interrupt = MagicMock()
+    _wire_stream(session.client, [])
+    session.client.interrupt = AsyncMock()
     session.client.set_permission_mode = AsyncMock()
     session.client.disconnect = AsyncMock()
     return session
@@ -125,8 +135,9 @@ class ToolResultBlock:
 
 
 class AssistantMessage:
-    def __init__(self, content):
+    def __init__(self, content, session_id=None):
         self.content = content
+        self.session_id = session_id
 
 
 class UserMessage:
@@ -135,8 +146,9 @@ class UserMessage:
 
 
 class SystemMessage:
-    def __init__(self, data):
+    def __init__(self, data, subtype="init"):
         self.data = data
+        self.subtype = subtype
 
 
 class ResultMessage:
@@ -222,11 +234,13 @@ class TestOnMessage:
         bot.feishu.reply.assert_called_once_with("msg1", HELP_TEXT)
 
     def test_regular_text_sends_processing(self, bot):
+        bot.sessions.get.return_value = None  # idle \u2014 no session running
         with patch.object(bot, "_schedule"):
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "\u23f3 Processing...")
 
     def test_regular_text_schedules_prompt(self, bot):
+        bot.sessions.get.return_value = None
         with patch.object(bot, "_schedule") as mock_sched:
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             mock_sched.assert_called_once()
@@ -574,7 +588,7 @@ class TestHandlePrompt:
         mock_client = MagicMock()
         mock_client.connect = AsyncMock()
         mock_client.query = AsyncMock()
-        mock_client.receive_response = _make_async_receive([])
+        _wire_stream(mock_client, [])
 
         with (
             patch("coder.main.create_claude_client", return_value=mock_client),
@@ -637,7 +651,7 @@ class TestHandlePrompt:
         mock_client = MagicMock()
         mock_client.connect = AsyncMock()
         mock_client.query = AsyncMock()
-        mock_client.receive_response = _make_async_receive([])
+        _wire_stream(mock_client, [])
 
         with (
             patch("coder.main.create_claude_client", return_value=mock_client),
@@ -668,7 +682,7 @@ class TestStreamResponse:
         msg = AssistantMessage([TextBlock("Hello world")])
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive([msg])
+        _wire_stream(session.client, [msg])
         bot.feishu.send_message.return_value = "msg_id"
 
         with patch("coder.main.StreamHandler") as mock_sh_cls:
@@ -683,7 +697,7 @@ class TestStreamResponse:
         msg = AssistantMessage([ToolUseBlock("bash", {"cmd": "ls"})])
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive([msg])
+        _wire_stream(session.client, [msg])
         bot.feishu.send_message.return_value = "msg_id"
 
         with patch("coder.main.StreamHandler") as mock_sh_cls:
@@ -698,7 +712,7 @@ class TestStreamResponse:
         msg = UserMessage([ToolResultBlock("output text", is_error=False)])
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive([msg])
+        _wire_stream(session.client, [msg])
         bot.feishu.send_message.return_value = "msg_id"
 
         with patch("coder.main.StreamHandler") as mock_sh_cls:
@@ -713,7 +727,7 @@ class TestStreamResponse:
         msg = SystemMessage({"session_id": "new-session-id"})
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive([msg])
+        _wire_stream(session.client, [msg])
         bot.feishu.send_message.return_value = "msg_id"
 
         with patch("coder.main.StreamHandler") as mock_sh_cls:
@@ -729,7 +743,7 @@ class TestStreamResponse:
         extra_msg = AssistantMessage([TextBlock("should not see")])
 
         session.client.query = AsyncMock()
-        session.client.receive_response = _make_async_receive([assist_msg, result_msg, extra_msg])
+        _wire_stream(session.client, [assist_msg, result_msg, extra_msg])
         bot.feishu.send_message.return_value = "msg_id"
 
         with patch("coder.main.StreamHandler") as mock_sh_cls:
@@ -966,10 +980,134 @@ class TestSkills:
     def test_skill_valid_schedules_prompt(self, bot):
         project = _make_project("proj1")
         bot.registry.get_by_chat_id.return_value = project
+        bot.sessions.get.return_value = None  # idle — plain processing ack
         with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/skill deploy", "chat1", "user1", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "⏳ Processing...")
             mock_sched.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bug-proof regression tests — see docs/sdlc/defects/
+# ---------------------------------------------------------------------------
+
+
+class TestRegressionResponseDesync:
+    """BUG-responds-to-previous-message: the SDK multiplexes all sessions
+    sharing the CLI process onto one stream; a foreign session's messages must
+    neither render into this turn's card nor end this turn."""
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_responds_to_previous_message_foreign_result_does_not_end_turn(
+        self, bot
+    ):
+        session = _make_session(session_id="main-sid")
+        stream = [
+            AssistantMessage([TextBlock("part one")]),
+            ResultMessage(session_id="teammate-sid"),  # another session's result
+            AssistantMessage([TextBlock("part two")]),
+            ResultMessage(session_id="main-sid"),
+        ]
+        _wire_stream(session.client, stream)
+        bot.feishu.send_message.return_value = "msg_id"
+
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "message N")
+
+        rendered = [c.args[0] for c in mock_streamer.on_text.call_args_list]
+        assert rendered == ["part one", "part two"]
+        # The foreign result must not hijack the session id used for resume.
+        assert session.session_id == "main-sid"
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_responds_to_previous_message_foreign_messages_not_rendered(
+        self, bot
+    ):
+        session = _make_session(session_id="main-sid")
+        stream = [
+            AssistantMessage([TextBlock("teammate chatter")], session_id="teammate-sid"),
+            AssistantMessage([TextBlock("real answer")], session_id="main-sid"),
+            ResultMessage(session_id="main-sid"),
+        ]
+        _wire_stream(session.client, stream)
+        bot.feishu.send_message.return_value = "msg_id"
+
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "message N")
+
+        mock_streamer.on_text.assert_called_once_with("real answer")
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_responds_to_previous_message_two_turn_desync(self, bot):
+        """The reported symptom end-to-end: a foreign ResultMessage mid-turn
+        must not shift turn N+1 into rendering turn N's leftover response.
+        Uses the SDK-faithful stream (receive_response terminates on the first
+        ResultMessage of any origin; leftovers persist across calls)."""
+        session = _make_session(session_id="main-sid")
+        stream = _wire_stream(
+            session.client,
+            [
+                AssistantMessage([TextBlock("answer to N")], session_id="main-sid"),
+                ResultMessage(session_id="teammate-sid"),  # foreign, mid-turn
+                AssistantMessage([TextBlock("rest of answer to N")], session_id="main-sid"),
+                ResultMessage(session_id="main-sid"),
+            ],
+        )
+        bot.feishu.send_message.return_value = "msg_id"
+
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            streamer_n = MagicMock()
+            mock_sh_cls.return_value = streamer_n
+            await bot._stream_response("chat1", session, "message N")
+
+        stream.extend(
+            [
+                AssistantMessage([TextBlock("answer to N+1")], session_id="main-sid"),
+                ResultMessage(session_id="main-sid"),
+            ]
+        )
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            streamer_n1 = MagicMock()
+            mock_sh_cls.return_value = streamer_n1
+            await bot._stream_response("chat1", session, "message N+1")
+
+        turn_n = [c.args[0] for c in streamer_n.on_text.call_args_list]
+        turn_n1 = [c.args[0] for c in streamer_n1.on_text.call_args_list]
+        assert turn_n == ["answer to N", "rest of answer to N"]
+        assert turn_n1 == ["answer to N+1"]
+
+
+class TestRegressionStopNoop:
+    """BUG-stop-never-interrupts: interrupt() is async; a call without await
+    is a silent no-op. The awaited assertion is the discriminator."""
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_stop_never_interrupts_interrupt_is_awaited(self, bot):
+        session = _make_session(locked=True)
+        bot.registry.get_by_chat_id.return_value = _make_project("proj1")
+        bot.sessions.get.return_value = session
+        await bot._cmd_stop("user1", "chat1", "msg1")
+        session.client.interrupt.assert_awaited_once()
+
+
+class TestRegressionQueuedAck:
+    """BUG-queued-message-acked-as-processing: a message arriving while the
+    session's turn is running is queued on the session lock — the ack must say
+    so instead of claiming it is being processed."""
+
+    def test_regression_BUG_queued_message_acked_as_processing_busy_gets_queued_notice(self, bot):
+        session = _make_session(locked=True)
+        bot.registry.get_by_chat_id.return_value = _make_project("proj1")
+        bot.sessions.get.return_value = session
+        with patch.object(bot, "_schedule") as mock_sched:
+            bot._on_message("chat1", "user1", "User", "next task", "msg2")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "queued" in reply_text.lower()
+        mock_sched.assert_called_once()  # the message is still processed afterwards
 
 
 # ---------------------------------------------------------------------------
