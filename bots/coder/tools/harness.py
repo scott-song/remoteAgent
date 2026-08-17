@@ -43,6 +43,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 CHAT_A, CHAT_B, USER = "chatA", "chatB", "userA"
@@ -232,7 +233,7 @@ def run(mock_claude: bool, keep: bool) -> int:
     )
     fake_coder = SimpleNamespace(projects_dir=str(projects_dir))
 
-    patches = [
+    patches: list[Any] = [
         patch("coder.main.FeishuClient", FakeFeishu),
         patch("coder.main.core_settings", fake_core),
         patch("coder.main.coder_settings", fake_coder),
@@ -254,9 +255,10 @@ def run(mock_claude: bool, keep: bool) -> int:
         feishu: FakeFeishu = bot.feishu
 
         # make scheduled coroutines block so output stays ordered & deterministic
-        bot._schedule = lambda coro: asyncio.run_coroutine_threadsafe(coro, bot.loop).result(
-            timeout=600
-        )
+        def _blocking_schedule(coro: Any) -> Any:
+            return asyncio.run_coroutine_threadsafe(coro, bot.loop).result(timeout=600)
+
+        setattr(bot, "_schedule", _blocking_schedule)
 
         def say(chat_id: str, user_id: str, text: str):
             print(f"\n\033[1m👤 [{user_id}@{chat_id}] {text}\033[0m")
