@@ -79,7 +79,7 @@ class ClaudeWorkspaceBot(CommandsMixin):
         elif text.lower().strip() in _GREETINGS:
             self.feishu.reply(message_id, HELP_TEXT)
         else:
-            self.feishu.reply(message_id, "⏳ Processing...")
+            self.feishu.reply(message_id, self._prompt_ack(sender_id, chat_id))
             self._schedule(self._handle_prompt(text, chat_id, sender_id, message_id))
 
     def _handle_command(self, text: str, chat_id: str, sender_id: str, message_id: str):
@@ -282,8 +282,40 @@ class ClaudeWorkspaceBot(CommandsMixin):
         try:
             await session.client.query(text)
 
+            # The SDK multiplexes every session sharing the CLI process onto one
+            # stream (e.g. agent-teams teammates). A foreign session's messages
+            # must neither render into this turn's card nor end this turn, or
+            # every later turn shows the previous turn's buffered response
+            # (BUG-responds-to-previous-message).
+            turn_sid = session.session_id
+            saw_turn_sid = False
+
             async for msg in session.client.receive_response():
                 msg_type = type(msg).__name__
+
+                if msg_type == "SystemMessage":
+                    data = msg.data if isinstance(getattr(msg, "data", None), dict) else {}
+                    sid = data.get("session_id")
+                    if sid and not saw_turn_sid:
+                        # The turn's first system message is this session's own
+                        # init — authoritative even if the CLI rotated the id.
+                        turn_sid = sid
+                        session.session_id = sid
+                        saw_turn_sid = True
+                    if sid and turn_sid and sid != turn_sid:
+                        continue
+                    if mode := data.get("permission_mode"):
+                        session.permission_mode = mode
+                    continue
+
+                msg_sid = getattr(msg, "session_id", None)
+                if msg_sid and turn_sid and msg_sid != turn_sid:
+                    if msg_type == "ResultMessage":
+                        logger.warning(
+                            f"[Stream] Ignoring foreign ResultMessage "
+                            f"({msg_sid[:8]}...) for {session.key}"
+                        )
+                    continue
 
                 if msg_type == "AssistantMessage" and hasattr(msg, "content"):
                     for block in msg.content:
@@ -303,16 +335,9 @@ class ClaudeWorkspaceBot(CommandsMixin):
                                 getattr(block, "is_error", False),
                             )
 
-                elif msg_type == "SystemMessage":
-                    if hasattr(msg, "data") and isinstance(msg.data, dict):
-                        if sid := msg.data.get("session_id"):
-                            session.session_id = sid
-                        if mode := msg.data.get("permission_mode"):
-                            session.permission_mode = mode
-
                 elif msg_type == "ResultMessage":
-                    if sid := getattr(msg, "session_id", None):
-                        session.session_id = sid
+                    if msg_sid:
+                        session.session_id = msg_sid
                     break
 
             self.sessions.save_to_history(session)

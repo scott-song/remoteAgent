@@ -100,7 +100,7 @@ def _make_session(
     session.client = MagicMock()
     session.client.query = AsyncMock()
     session.client.receive_response = _make_async_receive([])
-    session.client.interrupt = MagicMock()
+    session.client.interrupt = AsyncMock()
     session.client.set_permission_mode = AsyncMock()
     session.client.disconnect = AsyncMock()
     return session
@@ -125,8 +125,9 @@ class ToolResultBlock:
 
 
 class AssistantMessage:
-    def __init__(self, content):
+    def __init__(self, content, session_id=None):
         self.content = content
+        self.session_id = session_id
 
 
 class UserMessage:
@@ -222,11 +223,13 @@ class TestOnMessage:
         bot.feishu.reply.assert_called_once_with("msg1", HELP_TEXT)
 
     def test_regular_text_sends_processing(self, bot):
+        bot.sessions.get.return_value = None  # idle \u2014 no session running
         with patch.object(bot, "_schedule"):
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "\u23f3 Processing...")
 
     def test_regular_text_schedules_prompt(self, bot):
+        bot.sessions.get.return_value = None
         with patch.object(bot, "_schedule") as mock_sched:
             bot._on_message("chat1", "user1", "User", "do something", "msg1")
             mock_sched.assert_called_once()
@@ -966,10 +969,95 @@ class TestSkills:
     def test_skill_valid_schedules_prompt(self, bot):
         project = _make_project("proj1")
         bot.registry.get_by_chat_id.return_value = project
+        bot.sessions.get.return_value = None  # idle — plain processing ack
         with patch.object(bot, "_schedule") as mock_sched:
             bot._handle_command("/skill deploy", "chat1", "user1", "msg1")
             bot.feishu.reply.assert_called_once_with("msg1", "⏳ Processing...")
             mock_sched.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bug-proof regression tests — see docs/sdlc/defects/
+# ---------------------------------------------------------------------------
+
+
+class TestRegressionResponseDesync:
+    """BUG-responds-to-previous-message: the SDK multiplexes all sessions
+    sharing the CLI process onto one stream; a foreign session's messages must
+    neither render into this turn's card nor end this turn."""
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_responds_to_previous_message_foreign_result_does_not_end_turn(
+        self, bot
+    ):
+        session = _make_session(session_id="main-sid")
+        stream = [
+            AssistantMessage([TextBlock("part one")]),
+            ResultMessage(session_id="teammate-sid"),  # another session's result
+            AssistantMessage([TextBlock("part two")]),
+            ResultMessage(session_id="main-sid"),
+        ]
+        session.client.receive_response = _make_async_receive(stream)
+        bot.feishu.send_message.return_value = "msg_id"
+
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "message N")
+
+        rendered = [c.args[0] for c in mock_streamer.on_text.call_args_list]
+        assert rendered == ["part one", "part two"]
+        # The foreign result must not hijack the session id used for resume.
+        assert session.session_id == "main-sid"
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_responds_to_previous_message_foreign_messages_not_rendered(
+        self, bot
+    ):
+        session = _make_session(session_id="main-sid")
+        stream = [
+            AssistantMessage([TextBlock("teammate chatter")], session_id="teammate-sid"),
+            AssistantMessage([TextBlock("real answer")], session_id="main-sid"),
+            ResultMessage(session_id="main-sid"),
+        ]
+        session.client.receive_response = _make_async_receive(stream)
+        bot.feishu.send_message.return_value = "msg_id"
+
+        with patch("coder.main.StreamHandler") as mock_sh_cls:
+            mock_streamer = MagicMock()
+            mock_sh_cls.return_value = mock_streamer
+            await bot._stream_response("chat1", session, "message N")
+
+        mock_streamer.on_text.assert_called_once_with("real answer")
+
+
+class TestRegressionStopNoop:
+    """BUG-stop-never-interrupts: interrupt() is async; a call without await
+    is a silent no-op. The awaited assertion is the discriminator."""
+
+    @pytest.mark.asyncio
+    async def test_regression_BUG_stop_never_interrupts_interrupt_is_awaited(self, bot):
+        session = _make_session(locked=True)
+        bot.registry.get_by_chat_id.return_value = _make_project("proj1")
+        bot.sessions.get.return_value = session
+        await bot._cmd_stop("user1", "chat1", "msg1")
+        session.client.interrupt.assert_awaited_once()
+
+
+class TestRegressionQueuedAck:
+    """BUG-queued-message-acked-as-processing: a message arriving while the
+    session's turn is running is queued on the session lock — the ack must say
+    so instead of claiming it is being processed."""
+
+    def test_regression_BUG_queued_message_acked_as_processing_busy_gets_queued_notice(self, bot):
+        session = _make_session(locked=True)
+        bot.registry.get_by_chat_id.return_value = _make_project("proj1")
+        bot.sessions.get.return_value = session
+        with patch.object(bot, "_schedule") as mock_sched:
+            bot._on_message("chat1", "user1", "User", "next task", "msg2")
+        reply_text = bot.feishu.reply.call_args[0][1]
+        assert "queued" in reply_text.lower()
+        mock_sched.assert_called_once()  # the message is still processed afterwards
 
 
 # ---------------------------------------------------------------------------
