@@ -28,7 +28,14 @@ from lark_oapi.api.im.v1 import (
     ReplyMessageRequestBody,
 )
 
-from .attachments import ACK_EMOJI, IMAGE_MAX_BYTES
+from .attachments import (
+    ACCEPTED_MSG_TYPES,
+    ACK_EMOJI,
+    IMAGE_MAX_BYTES,
+    MAX_ATTACHMENTS,
+    Attachment,
+    attachment_store,
+)
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -60,6 +67,42 @@ def build_action_buttons(has_code_changes: bool = True) -> str:
         )
     buttons.append("📝 `/continue`")
     return "  ".join(buttons)
+
+
+# Feishu message-content shapes: an `image` message carries one key; a `post`
+# carries rich-text rows mixing text and `img` elements.
+_ATTACHMENT_ERRORS = {
+    "too_large": "⚠️ That image is over the 10 MB limit and was not attached.",
+    "failed": "⚠️ Could not download that image from Feishu. Try sending it again.",
+}
+
+
+def _extract_text(msg_type: str, content: dict) -> str:
+    """Pull the user's words out of a message body."""
+    if msg_type == "post":
+        parts = [
+            element.get("text", "")
+            for row in content.get("content", [])
+            for element in row
+            if element.get("tag") == "text"
+        ]
+        return " ".join(p for p in parts if p).strip()
+    return str(content.get("text", "")).strip()
+
+
+def _extract_image_keys(msg_type: str, content: dict) -> list[str]:
+    """Every image key in the message, in document order."""
+    if msg_type == "image":
+        key = content.get("image_key")
+        return [key] if key else []
+    if msg_type == "post":
+        return [
+            element["image_key"]
+            for row in content.get("content", [])
+            for element in row
+            if element.get("tag") == "img" and element.get("image_key")
+        ]
+    return []
 
 
 class FeishuClient:
@@ -96,8 +139,15 @@ class FeishuClient:
         # Event loop for async work
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
+        # Attachment holds; swappable for tests
+        self.attachments = attachment_store
+
     def on_message(self, callback: Callable):
-        """Register callback: callback(chat_id, sender_id, sender_name, text, message_id)"""
+        """Register callback.
+
+        callback(chat_id, sender_id, sender_name, text, message_id, attachments)
+        where attachments is a list[Attachment] — empty for a plain text message.
+        """
         self._on_message_callback = callback
 
     def start(self, loop: asyncio.AbstractEventLoop):
@@ -146,12 +196,18 @@ class FeishuClient:
         return thread
 
     def _on_event(self, data: Any) -> None:
-        """Handle incoming message event from Feishu."""
+        """Handle incoming message event from Feishu.
+
+        Runs on the lark WebSocket callback thread, which delivers events for
+        every chat — so anything slow (a resource download) is offloaded to the
+        bot's loop and this returns immediately.
+        """
         try:
             message = data.event.message
             sender = data.event.sender
 
-            # Dedup
+            # Dedup — upstream of any download, so a redelivered event neither
+            # re-downloads nor re-reacts.
             message_id = message.message_id
             if message_id in self._seen_ids:
                 return
@@ -159,33 +215,103 @@ class FeishuClient:
             while len(self._seen_ids) > self._seen_max:
                 self._seen_ids.popitem(last=False)
 
-            # Only text messages
-            if message.message_type != "text":
+            msg_type = message.message_type
+            if msg_type != "text" and msg_type not in ACCEPTED_MSG_TYPES:
                 return
 
-            # Extract sender info
             sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
+            chat_id = message.chat_id
+            sender_name = sender_id  # Feishu doesn't give username in the event easily
 
-            # Parse text and remove @mention
             content = json.loads(message.content)
-            text = content.get("text", "").strip()
+            text = _extract_text(msg_type, content)
             if hasattr(message, "mentions") and message.mentions:
                 for mention in message.mentions:
                     text = text.replace(mention.key, "").strip()
 
-            if not text:
+            image_keys = _extract_image_keys(msg_type, content)
+            if image_keys:
+                if self._loop is None:
+                    logger.error("[Feishu] No loop available — cannot fetch attachment")
+                    self.reply(message_id, _ATTACHMENT_ERRORS["failed"])
+                    return
+                logger.info(
+                    f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: "
+                    f"{len(image_keys)} image(s) + {len(text)} chars"
+                )
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_attachments(data, chat_id, sender_id, sender_name, text),
+                    self._loop,
+                )
                 return
 
-            chat_id = message.chat_id
-            sender_name = sender_id  # Feishu doesn't give username in the event easily
+            if not text:
+                return
 
             logger.info(f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: {text}")
 
             if self._on_message_callback:
-                self._on_message_callback(chat_id, sender_id, sender_name, text, message_id)
+                self._on_message_callback(chat_id, sender_id, sender_name, text, message_id, [])
 
         except Exception as e:
             logger.error(f"[Feishu] Error handling message: {e}", exc_info=True)
+
+    async def _handle_attachments(
+        self, data: Any, chat_id: str, sender_id: str, sender_name: str, text: str
+    ) -> None:
+        """Download, hold and acknowledge a message's images.
+
+        Runs on the bot's loop; each blocking download goes to a worker thread so
+        neither the WebSocket thread nor the loop stalls (NFR-1).
+        """
+        message = data.event.message
+        message_id = message.message_id
+        content = json.loads(message.content)
+
+        # Cap downloads per message, not just per prompt: a post can embed
+        # arbitrarily many images, and the cap must bound transfer.
+        keys = _extract_image_keys(message.message_type, content)[:MAX_ATTACHMENTS]
+
+        loop = asyncio.get_running_loop()
+        attachments: list[Attachment] = []
+        failures: list[str] = []
+
+        for key in keys:
+            try:
+                payload, reason = await loop.run_in_executor(
+                    None, self.download_resource, message_id, key
+                )
+            except Exception as e:
+                logger.error(f"[Feishu] Attachment fetch raised for {key[:8]}...: {e}")
+                failures.append("failed")
+                continue
+
+            if payload is None:
+                failures.append(reason or "failed")
+                continue
+
+            attachment = self.attachments.put(sender_id, chat_id, payload)
+            if attachment is None:
+                failures.append("failed")
+                continue
+            attachments.append(attachment)
+
+        # One reply per distinct cause, so five bad images are not five replies.
+        for reason in dict.fromkeys(failures):
+            self.reply(message_id, _ATTACHMENT_ERRORS.get(reason, _ATTACHMENT_ERRORS["failed"]))
+
+        if not attachments and not text:
+            return
+
+        if not text:
+            # A bare image is acknowledged with a reaction and starts no turn.
+            self.react(message_id)
+            return
+
+        if self._on_message_callback:
+            self._on_message_callback(
+                chat_id, sender_id, sender_name, text, message_id, attachments
+            )
 
     # ── Send / Update Messages ────────────────────────────
 

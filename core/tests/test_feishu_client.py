@@ -42,13 +42,14 @@ def _make_event(
     chat_id="chat_001",
     sender_open_id="user_001",
     mentions=None,
+    content=None,
 ):
     """Build a mock event data object matching the lark SDK shape."""
     mention_objs = mentions or []
     message = SimpleNamespace(
         message_id=message_id,
         message_type=message_type,
-        content=json.dumps({"text": text}),
+        content=json.dumps(content if content is not None else {"text": text}),
         chat_id=chat_id,
         mentions=mention_objs,
     )
@@ -131,7 +132,7 @@ class TestOnEvent:
         event = _make_event(text="hi there")
         client._on_event(event)
 
-        cb.assert_called_once_with("chat_001", "user_001", "user_001", "hi there", "msg_001")
+        cb.assert_called_once_with("chat_001", "user_001", "user_001", "hi there", "msg_001", [])
 
     def test_duplicate_message_id_deduplicated(self):
         client = _make_client()
@@ -143,16 +144,6 @@ class TestOnEvent:
         client._on_event(event)
 
         cb.assert_called_once()
-
-    def test_non_text_message_ignored(self):
-        client = _make_client()
-        cb = MagicMock()
-        client.on_message(cb)
-
-        event = _make_event(message_type="image", text="ignored")
-        client._on_event(event)
-
-        cb.assert_not_called()
 
     def test_empty_text_after_mention_strip_ignored(self):
         client = _make_client()
@@ -687,3 +678,203 @@ class TestReact:
         assert client.react("msg_1") is False
         assert client.lark_client.im.v1.message.reply.call_count == 0
         assert client.lark_client.im.v1.message.create.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Widened event path  (T3 — AC-2, AC-3, AC-6, AC-8, AC-12)
+# ---------------------------------------------------------------------------
+
+
+def _image_event(image_key="img_1", **kw):
+    return _make_event(message_type="image", content={"image_key": image_key}, **kw)
+
+
+def _post_event(text="why is this misaligned?", image_keys=("img_1",), **kw):
+    elements = [{"tag": "text", "text": text}]
+    elements += [{"tag": "img", "image_key": k} for k in image_keys]
+    return _make_event(message_type="post", content={"title": "", "content": [elements]}, **kw)
+
+
+class TestEventDispatch:
+    def test_attachment_work_is_offloaded_not_run_on_the_websocket_thread(self):
+        """NFR-1: _on_event runs on the lark callback thread, which delivers events
+        for every chat — a synchronous download there stalls all of them."""
+        client = _make_client()
+        client._loop = MagicMock()
+        client.on_message(MagicMock())
+        client.download_resource = MagicMock()
+
+        with patch("core.feishu_client.asyncio.run_coroutine_threadsafe") as scheduled:
+            client._on_event(_image_event())
+
+        assert scheduled.call_count == 1
+        client.download_resource.assert_not_called()
+
+    def test_text_messages_still_take_the_direct_path(self):
+        """AC-4's precondition — text is unchanged and never offloaded."""
+        client = _make_client()
+        client._loop = MagicMock()
+        cb = MagicMock()
+        client.on_message(cb)
+
+        with patch("core.feishu_client.asyncio.run_coroutine_threadsafe") as scheduled:
+            client._on_event(_make_event(text="run the tests"))
+
+        scheduled.assert_not_called()
+        cb.assert_called_once_with(
+            "chat_001", "user_001", "user_001", "run the tests", "msg_001", []
+        )
+
+    def test_int_AC_12_a_non_image_attachment_changes_nothing(self):
+        """Given a file, audio, video or sticker message, then the bot holds
+        nothing, starts no agent turn, and posts no reply."""
+        client = _make_client()
+        client._loop = MagicMock()
+        cb = MagicMock()
+        client.on_message(cb)
+        client.download_resource = MagicMock()
+        client.react = MagicMock()
+
+        for msg_type in ("file", "audio", "media", "sticker"):
+            with patch("core.feishu_client.asyncio.run_coroutine_threadsafe") as scheduled:
+                client._on_event(_make_event(message_type=msg_type, message_id=f"m_{msg_type}"))
+            scheduled.assert_not_called()
+
+        cb.assert_not_called()
+        client.download_resource.assert_not_called()
+        client.react.assert_not_called()
+
+    def test_duplicate_image_event_is_dropped_before_any_download(self):
+        """Dedup stays upstream of the download so a redelivered event neither
+        re-downloads nor re-reacts."""
+        client = _make_client()
+        client._loop = MagicMock()
+        client.on_message(MagicMock())
+        event = _image_event(message_id="dup_img")
+
+        with patch("core.feishu_client.asyncio.run_coroutine_threadsafe") as scheduled:
+            client._on_event(event)
+            client._on_event(event)
+
+        assert scheduled.call_count == 1
+
+    def test_an_image_with_no_loop_available_is_reported_not_dropped(self):
+        client = _make_client()
+        client._loop = None
+        client.on_message(MagicMock())
+        client.reply = MagicMock()
+
+        client._on_event(_image_event())
+
+        assert client.reply.call_count == 1
+
+
+class TestHandleAttachments:
+    """The offloaded coroutine — where downloads, holds and acks actually happen."""
+
+    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n", None)):
+        from core.attachments import AttachmentStore
+
+        client = _make_client()
+        client.download_resource = MagicMock(return_value=download)
+        client.react = MagicMock(return_value=True)
+        client.attachments = AttachmentStore(root=tmp_path)
+        return client
+
+    async def test_int_AC_3_a_bare_image_is_acknowledged_with_no_reply_or_turn(self, tmp_path):
+        """Given a message containing only an image, then the bot adds an emoji
+        reaction, posts no reply, and no agent turn starts."""
+        client = self._client(tmp_path)
+        cb = MagicMock()
+        client.on_message(cb)
+
+        await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        client.react.assert_called_once_with("msg_001")
+        cb.assert_not_called()
+        assert client.lark_client.im.v1.message.reply.call_count == 0
+
+    async def test_int_AC_2_an_image_and_its_caption_are_used_together(self, tmp_path):
+        """Given one rich-text message containing both an image and text, then the
+        turn includes both, with no hold and no second message required."""
+        client = self._client(tmp_path)
+        cb = MagicMock()
+        client.on_message(cb)
+
+        await client._handle_attachments(
+            _post_event(), "chat_001", "user_001", "user_001", "why is this misaligned?"
+        )
+
+        assert cb.call_count == 1
+        args = cb.call_args[0]
+        assert args[3] == "why is this misaligned?"
+        assert len(args[5]) == 1
+        client.react.assert_not_called()
+
+    async def test_int_AC_6_downloads_are_capped_per_message(self, tmp_path):
+        """A post can embed arbitrarily many images; the cap must bound transfer,
+        not just prompt size (design § Performance → Hot paths)."""
+        from core.attachments import MAX_ATTACHMENTS
+
+        client = self._client(tmp_path)
+        client.on_message(MagicMock())
+        keys = tuple(f"img_{i}" for i in range(9))
+
+        await client._handle_attachments(
+            _post_event(image_keys=keys), "chat_001", "user_001", "user_001", "compare these"
+        )
+
+        assert client.download_resource.call_count == MAX_ATTACHMENTS
+
+    async def test_int_AC_7_an_oversized_image_is_reported_and_nothing_held(self, tmp_path):
+        client = self._client(tmp_path, download=(None, "too_large"))
+        cb = MagicMock()
+        client.on_message(cb)
+        client.reply = MagicMock()
+
+        await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        cb.assert_not_called()
+        client.reply.assert_called_once_with(
+            "msg_001", "⚠️ That image is over the 10 MB limit and was not attached."
+        )
+
+    async def test_int_AC_8_a_failed_download_is_reported_and_nothing_held(self, tmp_path):
+        client = self._client(tmp_path, download=(None, "failed"))
+        cb = MagicMock()
+        client.on_message(cb)
+        client.reply = MagicMock()
+
+        await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        cb.assert_not_called()
+        client.reply.assert_called_once_with(
+            "msg_001", "⚠️ Could not download that image from Feishu. Try sending it again."
+        )
+
+    async def test_unstorable_bytes_are_reported_not_silently_dropped(self, tmp_path):
+        client = self._client(tmp_path, download=(b"%PDF-1.7 not an image", None))
+        cb = MagicMock()
+        client.on_message(cb)
+        client.reply = MagicMock()
+
+        await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        cb.assert_not_called()
+        assert client.reply.call_count == 1
+
+    async def test_text_survives_when_one_of_several_images_fails(self, tmp_path):
+        """A partial failure must not swallow the user's question."""
+        client = self._client(tmp_path)
+        client.download_resource = MagicMock(
+            side_effect=[(b"\x89PNG\r\n\x1a\n", None), (None, "failed")]
+        )
+        cb = MagicMock()
+        client.on_message(cb)
+
+        await client._handle_attachments(
+            _post_event(image_keys=("a", "b")), "chat_001", "user_001", "user_001", "look"
+        )
+
+        assert cb.call_count == 1
+        assert len(cb.call_args[0][5]) == 1

@@ -46,13 +46,13 @@ land together in the same PR — see the risk register.
 
 ### T3 — Widen the event path to carry attachments
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T1, T2 — needs the store and both calls
-- **Files**: `core/src/core/feishu_client.py`
+- **Files**: `core/src/core/feishu_client.py`, `core/tests/test_feishu_client.py`
 - **Design**: `§ Architecture` (the flow diagram) · `§ Backend API → widened callback contract` · `§ Performance → Where the work runs`
 - **Covers**: AC-2 (full), AC-3 (full — completes T2), AC-6 (partial — the per-message download cap), AC-8 (full — completes T2), AC-12 (full)
 - **Risk**: high — this is the breaking signature change; it cannot land without T4 (see risk register).
-- **Notes**: replace the `msg_type != "text"` early return at `feishu_client.py:158` with the `ACCEPTED_MSG_TYPES` allowlist; everything outside it keeps returning silently (AC-12). Extract `image_key` from an `image` message and every embedded image from a `post`, **capping downloads at `MAX_ATTACHMENTS` per message** so one `post` cannot authorise unbounded transfer. Offload the download onto the loop stored at `feishu_client.py:100` via `run_coroutine_threadsafe` — a synchronous download here would stall event delivery for every chat (NFR-1). A message with images **and** text passes attachments straight through; a bare image reacts and returns without invoking the callback (AC-3). The existing `_seen_ids` dedup at `:151-156` must stay **upstream** of the download so a redelivered event neither re-downloads nor re-reacts.
+- **Notes**: `red: AttributeError: 'FeishuClient' object has no attribute '_handle_attachments'` (11 tests). Two legacy tests changed per the case table: `test_valid_text_triggers_callback` **modified** (the callback gained its trailing `[]`), `test_non_text_message_ignored` **deleted** — an `image` message is no longer ignored, so its assertion became wrong rather than stale, and the surviving behaviour is covered by `test_int_AC_12_a_non_image_attachment_changes_nothing`. Blocking downloads run via `run_in_executor` so neither the WS thread nor the bot loop stalls. replace the `msg_type != "text"` early return at `feishu_client.py:158` with the `ACCEPTED_MSG_TYPES` allowlist; everything outside it keeps returning silently (AC-12). Extract `image_key` from an `image` message and every embedded image from a `post`, **capping downloads at `MAX_ATTACHMENTS` per message** so one `post` cannot authorise unbounded transfer. Offload the download onto the loop stored at `feishu_client.py:100` via `run_coroutine_threadsafe` — a synchronous download here would stall event delivery for every chat (NFR-1). A message with images **and** text passes attachments straight through; a bare image reacts and returns without invoking the callback (AC-3). The existing `_seen_ids` dedup at `:151-156` must stay **upstream** of the download so a redelivered event neither re-downloads nor re-reacts.
 
 ### T4 — Update the HR bot for the widened callback
 
@@ -120,6 +120,7 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 ## Build record  <!-- role-dev writes this during the build — empty at plan time -->
 
 - `W1 self-review @ 76deebd — 2 files · 0 critical, 0 important, 1 suggestion (chmod applied after write_bytes; brief default-perm window)`
+- `W3 self-review @ 5cf2a9c — 2 files · 0 critical, 1 important FOUND AND FIXED IN-WAVE (two AC-7/AC-8 assertions read lark's builder output, which test_stream_handler's sys.modules stub turns into a MagicMock — order-dependent; now spy on client.reply)`
 - `W2 self-review @ 8e43f60 — 6 files · 1 important FOUND AND FIXED IN-WAVE (test_stream_handler's lark stub broke on T2's new imports), 0 critical, 0 suggestions`
 
 ## Revisions  <!-- History -->
