@@ -1153,3 +1153,149 @@ class TestMain:
             main()
             mock_acq.assert_called_once()
             mock_rel.assert_called_once_with(7)
+
+
+# ---------------------------------------------------------------------------
+# Attaching held images  (T5 — AC-1, AC-4, AC-5, AC-6, AC-9, AC-10)
+# ---------------------------------------------------------------------------
+
+
+def _att(tmp_path, name="shot.png"):
+    from core.attachments import Attachment
+
+    path = tmp_path / name
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    return Attachment(path=path, media_type="image/png", size=8, received_at=0.0)
+
+
+class TestComposePrompt:
+    def test_int_AC_1_a_pasted_image_is_carried_by_the_next_message(self, bot, tmp_path):
+        """Given a user who pasted one image, when they send a text message, then
+        the agent's turn includes the image — referenced by absolute path so the
+        agent's own Read tool ingests it (design § Trade-offs)."""
+        attachment = _att(tmp_path)
+
+        prompt = bot._compose_prompt("why is this misaligned?", [attachment])
+
+        assert "why is this misaligned?" in prompt
+        assert str(attachment.path.resolve()) in prompt
+
+    def test_int_AC_4_plain_text_is_unchanged_when_nothing_is_held(self, bot):
+        """The prompt must be byte-identical to today's when no image is held."""
+        assert bot._compose_prompt("run the tests", []) == "run the tests"
+
+    def test_every_attachment_is_referenced(self, bot, tmp_path):
+        atts = [_att(tmp_path, f"s{i}.png") for i in range(3)]
+
+        prompt = bot._compose_prompt("compare these", atts)
+
+        for attachment in atts:
+            assert str(attachment.path.resolve()) in prompt
+
+    def test_paths_are_absolute(self, bot, tmp_path):
+        """A relative path would resolve against the project cwd, not the store."""
+        prompt = bot._compose_prompt("look", [_att(tmp_path)])
+
+        for line in prompt.splitlines():
+            if ".png" in line:
+                assert line.strip().startswith(("Attached image:", "/")) or "/" in line
+                assert "./" not in line
+
+
+class TestAckCount:
+    def test_ack_names_the_attachment_count(self, bot):
+        bot.sessions.get.return_value = None
+
+        assert bot._prompt_ack("u1", "c1", attachment_count=1) == (
+            "⏳ Processing... (1 image attached)"
+        )
+
+    def test_ack_pluralises(self, bot):
+        bot.sessions.get.return_value = None
+
+        assert bot._prompt_ack("u1", "c1", attachment_count=3) == (
+            "⏳ Processing... (3 images attached)"
+        )
+
+    def test_int_AC_4_ack_is_unchanged_with_no_attachments(self, bot):
+        bot.sessions.get.return_value = None
+
+        assert bot._prompt_ack("u1", "c1") == "⏳ Processing..."
+
+    def test_warnings_are_appended_to_the_ack(self, bot):
+        bot.sessions.get.return_value = None
+
+        ack = bot._prompt_ack("u1", "c1", warnings=["⚠️ something expired"])
+
+        assert "⏳ Processing..." in ack
+        assert "⚠️ something expired" in ack
+
+    def test_int_AC_5_expiry_warning_reaches_the_user(self, bot):
+        """AC-5's observable is the reply text, which the store supplies and the
+        ack carries."""
+        bot.sessions.get.return_value = None
+        expired = (
+            "⚠️ Your earlier image expired after 10 minutes and was not included. "
+            "Paste it again if you still need it."
+        )
+
+        assert expired in bot._prompt_ack("u1", "c1", warnings=[expired])
+
+    def test_int_AC_6_cap_warning_reaches_the_user(self, bot):
+        bot.sessions.get.return_value = None
+        dropped = "⚠️ Only the 5 most recent images were attached; 1 older image was dropped."
+
+        assert dropped in bot._prompt_ack("u1", "c1", attachment_count=5, warnings=[dropped])
+
+
+class TestOnMessageDrainsTheHold:
+    def test_int_AC_1_held_images_reach_the_prompt(self, bot, tmp_path):
+        bot.sessions.get.return_value = None
+        attachment = _att(tmp_path)
+
+        with patch.object(bot, "_schedule") as sched:
+            bot._on_message("c1", "u1", "User", "what is wrong here?", "m1", [attachment])
+
+        sched.assert_called_once()
+        ack = bot.feishu.reply.call_args[0][1]
+        assert "1 image attached" in ack
+
+    def test_int_AC_9_another_members_message_carries_nothing(self, bot):
+        """The store is keyed (sender, chat); the bot passes through whatever the
+        transport handed it, so an empty list stays empty."""
+        bot.sessions.get.return_value = None
+
+        with patch.object(bot, "_schedule"):
+            bot._on_message("c1", "u2", "Other", "status?", "m2", [])
+
+        assert bot.feishu.reply.call_args[0][1] == "⏳ Processing..."
+
+    def test_a_command_ignores_attachments(self, bot, tmp_path):
+        """`/help` with a pasted image must not start an agent turn."""
+        with patch.object(bot, "_handle_command") as cmd:
+            bot._on_message("c1", "u1", "User", "/help", "m1", [_att(tmp_path)])
+
+        cmd.assert_called_once_with("/help", "c1", "u1", "m1")
+
+    def test_callback_still_works_without_attachments(self, bot):
+        """Defaulted, so the argument is additive for every existing caller."""
+        bot.sessions.get.return_value = None
+
+        with patch.object(bot, "_schedule"):
+            bot._on_message("c1", "u1", "User", "do something", "m1")
+
+        assert bot.feishu.reply.call_args[0][1] == "⏳ Processing..."
+
+
+class TestRepoIsolation:
+    def test_int_AC_10_attachments_live_outside_every_project_tree(self, tmp_path):
+        """Given a project with auto_git, the commit must contain no attachment.
+        git_sync stages with `git add -A`, so the guarantee is structural: the
+        store root is not inside any project directory."""
+        from core.attachments import ATTACHMENTS_ROOT
+
+        project_dir = tmp_path / "some-project"
+        project_dir.mkdir()
+
+        assert not str(ATTACHMENTS_ROOT).startswith(str(project_dir.resolve()))
+        assert ".claude-workspace" in str(ATTACHMENTS_ROOT)

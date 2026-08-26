@@ -66,13 +66,13 @@ land together in the same PR — see the risk register.
 
 ### T5 — Attach held images to the coder bot's prompts
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T1, T3 — needs `take()` and the new callback contract
-- **Files**: `bots/coder/src/coder/main.py`, `bots/coder/src/coder/commands.py`
+- **Files**: `bots/coder/src/coder/main.py`, `bots/coder/src/coder/commands.py`, `bots/coder/tests/test_coder_main.py`
 - **Design**: `§ Backend API → the agent-SDK handoff` · `§ Trade-offs` (path reference over base64)
 - **Covers**: AC-1 (full), AC-4 (full), AC-5 (full — completes T1), AC-6 (full — completes T1/T3), AC-9 (full — completes T1), AC-10 (full — completes T1)
 - **Risk**: medium — AC-1 depends on the agent electing to call `Read` on the referenced path; failure is a confident answer about an unread image, not an exception.
-- **Notes**: call `take(sender_id, chat_id)` in `_on_message`, compose the prompt via `_compose_prompt` with one `Attached image: <abs path>` line per attachment, and pass the count plus any warnings into `_prompt_ack` (`commands.py:73`) so the ack reads *"⏳ Processing... (1 image attached)"* — and reads exactly as today when nothing is held (AC-4). `query()` keeps taking a `str`; do not switch to the `AsyncIterable` form. AC-10's guard belongs here as a test: a project with `auto_git` enabled must produce a commit containing no attachment and an unchanged working tree after an image turn.
+- **Notes**: `red: AttributeError: 'ClaudeWorkspaceBot' object has no attribute '_compose_prompt'` (12 tests). `_compose_prompt` appends a fixed *"Read the attached image file(s) above before answering."* line the user's text cannot displace — the mitigation for the AC-1 risk that the agent might not elect to read the path. `_on_message` drains held **plus** inline attachments, so pasting an image and then sending a captioned post attaches both. call `take(sender_id, chat_id)` in `_on_message`, compose the prompt via `_compose_prompt` with one `Attached image: <abs path>` line per attachment, and pass the count plus any warnings into `_prompt_ack` (`commands.py:73`) so the ack reads *"⏳ Processing... (1 image attached)"* — and reads exactly as today when nothing is held (AC-4). `query()` keeps taking a `str`; do not switch to the `AsyncIterable` form. AC-10's guard belongs here as a test: a project with `auto_git` enabled must produce a commit containing no attachment and an unchanged working tree after an image turn.
 
 ### T6 — Purge attachments on session end, reset, and stale cleanup
 

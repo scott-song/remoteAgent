@@ -70,7 +70,13 @@ class CommandsMixin:
         projects = self.registry.list_projects()
         return projects[0].name if projects else ""
 
-    def _prompt_ack(self, sender_id: str, chat_id: str) -> str:
+    def _prompt_ack(
+        self,
+        sender_id: str,
+        chat_id: str,
+        attachment_count: int = 0,
+        warnings: list[str] | None = None,
+    ) -> str:
         """Acknowledgment for an incoming prompt — honest about queueing.
 
         A message that arrives while this session's turn is running waits on
@@ -80,11 +86,21 @@ class CommandsMixin:
         project_name = self._resolve_project(sender_id, chat_id)
         session = self.sessions.get(sender_id, project_name, chat_id) if project_name else None
         if session and session.lock.locked():
-            return (
+            base = (
                 "⏳ Still working on your previous message — this one is queued. "
                 "Send /stop to interrupt."
             )
-        return "⏳ Processing..."
+        elif attachment_count:
+            noun = "image" if attachment_count == 1 else "images"
+            base = f"⏳ Processing... ({attachment_count} {noun} attached)"
+        else:
+            base = "⏳ Processing..."
+
+        # Store-supplied warnings (expiry, over-cap) ride along with the ack
+        # rather than becoming separate chat messages.
+        if warnings:
+            return "\n".join([base, *warnings])
+        return base
 
     # ── Quick actions (tappable from response cards) ─────
 
