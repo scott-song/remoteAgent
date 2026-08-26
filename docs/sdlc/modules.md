@@ -16,7 +16,7 @@
 | `messaging` | Feishu integration: WebSocket long-connection, REST replies, interactive cards, streaming updates, message de-duplication, @mention stripping |
 | `sessions` | Per-(user, project) Claude session lifecycle: creation, isolation, the `Session.lock` concurrency model, resume/auto-resume, on-disk history at `~/.claude-workspace/sessions.json`, stale-session cleanup |
 | `projects` | Project registry & YAML config: add / remove / bind / unbind, chat→project resolution, the `ProjectConfig` schema, per-project settings |
-| `agent-runtime` | Claude Agent SDK client construction: tool allowlist, MCP server wiring, the `.claude_settings.json` generation, the PreToolUse bash security hook (command allowlist + path restriction) |
+| `agent-runtime` | Claude Agent SDK client construction: tool allowlist, MCP server wiring, `setting_sources` (permissions come from the project's own `.claude/settings.json`), the PreToolUse bash security hook (opt-in command allowlist + path restriction) |
 | `git-sync` | Project repo clone/pull before work, auto-commit/push after changes (`auto_git`) |
 | `platform` | Dev-team-facing foundation: packaging, dependency management, CI/CD, lint/format/type tooling, logging, configuration, and developer docs. The "user" of this module is the team itself. |
 

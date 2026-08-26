@@ -23,6 +23,7 @@ def make_project(tmp_path: Path, **overrides) -> ProjectConfig:
         system_prompt=None,
         setting_sources=["user", "project"],
         restricted=True,
+        bash_allowlist=False,  # mirrors the ProjectConfig default
         allowed_commands=[],
         mcp_servers={},
         feishu_chat_ids=[],
@@ -167,7 +168,7 @@ class TestCreateClaudeClient:
     def test_allowed_commands_merged(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        project = make_project(tmp_path, allowed_commands=["docker", "make"])
+        project = make_project(tmp_path, bash_allowlist=True, allowed_commands=["docker", "make"])
         create_claude_client(project)
 
         called_cmds = mock_make_hook.call_args[0][0]
@@ -196,23 +197,37 @@ class TestCreateClaudeClient:
         assert kwargs["mcp_servers"]["proj-srv"] == {"command": "p"}
         assert kwargs["mcp_servers"]["agent-srv"] == {"command": "a"}
 
-    def test_writes_claude_settings_json(self, MockOptions, MockClient, mock_mcp, tmp_path):
+    def test_writes_no_settings_file_into_project(
+        self, MockOptions, MockClient, mock_mcp, tmp_path
+    ):
+        """The bot must not litter the target repo with a generated settings file."""
         project = make_project(tmp_path)
         create_claude_client(project)
 
-        settings_file = project.project_dir.resolve() / ".claude_settings.json"
-        assert settings_file.exists()
+        assert not (project.project_dir.resolve() / ".claude_settings.json").exists()
 
-        data = json.loads(settings_file.read_text())
-        assert "permissions" in data
-        assert "allow" in data["permissions"]
-        assert "Bash(*)" in data["permissions"]["allow"]
+    def test_no_settings_option_passed(self, MockOptions, MockClient, mock_mcp, tmp_path):
+        """Permissions come from setting_sources, not an injected --settings file."""
+        project = make_project(tmp_path)
+        create_claude_client(project)
+
+        kwargs = MockOptions.call_args[1]
+        assert "settings" not in kwargs
+        assert kwargs["setting_sources"] == ["user", "project"]
+
+    def test_creates_cwd_if_missing(self, MockOptions, MockClient, mock_mcp, tmp_path):
+        """cwd must exist before the CLI subprocess starts."""
+        project = make_project(tmp_path)
+        assert not project.project_dir.exists()
+        create_claude_client(project)
+
+        assert project.project_dir.resolve().is_dir()
 
     @patch("coder.sdk_client.make_bash_security_hook")
     def test_unrestricted_agent_has_no_restricted_dir(
         self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
     ):
-        project = make_project(tmp_path, restricted=False)
+        project = make_project(tmp_path, bash_allowlist=True, restricted=False)
         create_claude_client(project)
 
         # restricted_dir should be None
@@ -229,3 +244,47 @@ class TestCreateClaudeClient:
 
         called_restricted_dir = mock_make_hook.call_args[0][1]
         assert called_restricted_dir == str(project.project_dir.resolve())
+
+    @patch("coder.sdk_client.make_bash_security_hook")
+    def test_default_project_has_no_command_allowlist(
+        self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
+    ):
+        """Globally, a project that says nothing gets no command-name allowlist."""
+        project = make_project(tmp_path)
+        create_claude_client(project)
+
+        assert mock_make_hook.call_args[0][0] is None
+
+    @patch("coder.sdk_client.make_bash_security_hook")
+    def test_bash_allowlist_off_passes_none_commands(
+        self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
+    ):
+        """bash_allowlist: false disables the command check but keeps the path gate."""
+        project = make_project(tmp_path, bash_allowlist=False, restricted=True)
+        create_claude_client(project)
+
+        allowed_cmds, restricted_dir = mock_make_hook.call_args[0]
+        assert allowed_cmds is None
+        assert restricted_dir == str(project.project_dir.resolve())
+        assert MockOptions.call_args[1]["hooks"] is not None
+
+    @patch("coder.sdk_client.make_bash_security_hook")
+    def test_both_gates_off_registers_no_hook(
+        self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
+    ):
+        """With neither gate active, no PreToolUse veto is layered over settings.json."""
+        project = make_project(tmp_path, bash_allowlist=False, restricted=False)
+        create_claude_client(project)
+
+        mock_make_hook.assert_not_called()
+        assert MockOptions.call_args[1]["hooks"] is None
+
+    @patch("coder.sdk_client.make_bash_security_hook")
+    def test_allowlist_off_ignores_allowed_commands(
+        self, mock_make_hook, MockOptions, MockClient, mock_mcp, tmp_path
+    ):
+        """allowed_commands is moot once the allowlist itself is disabled."""
+        project = make_project(tmp_path, bash_allowlist=False, allowed_commands=["make"])
+        create_claude_client(project)
+
+        assert mock_make_hook.call_args[0][0] is None

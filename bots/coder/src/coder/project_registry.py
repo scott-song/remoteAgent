@@ -33,6 +33,11 @@ class ProjectConfig:
     system_prompt: Optional[str] = None
     setting_sources: list[str] = field(default_factory=lambda: ["user", "project"])
     restricted: bool = True
+    # Off by default (ADR-0006 amendment): the command-name allowlist is not
+    # enforced, so `deny` rules in the project's .claude/settings.json are the
+    # command-level policy. Path confinement still comes from `restricted`.
+    # Set `bash_allowlist: true` in a project's YAML to opt that project back in.
+    bash_allowlist: bool = False
     allowed_commands: list[str] = field(default_factory=list)
     mcp_servers: dict = field(default_factory=dict)
     browser_tool: str = "playwright"
@@ -70,6 +75,7 @@ class ProjectRegistry:
             system_prompt=raw.get("system_prompt"),
             setting_sources=raw.get("setting_sources", ["user", "project"]),
             restricted=raw.get("restricted", True),
+            bash_allowlist=raw.get("bash_allowlist", False),
             allowed_commands=raw.get("allowed_commands", []),
             mcp_servers=raw.get("mcp_servers", {}),
             browser_tool=raw.get("browser_tool", "playwright"),
@@ -119,6 +125,7 @@ class ProjectRegistry:
             "permission_mode": "acceptEdits",
             "setting_sources": ["user", "project"],
             "restricted": True,
+            "bash_allowlist": False,
             "feishu_chat_ids": [chat_id] if chat_id else [],
         }
         if github_url:
@@ -169,6 +176,7 @@ class ProjectRegistry:
             "permission_mode": project.permission_mode,
             "setting_sources": project.setting_sources,
             "restricted": project.restricted,
+            "bash_allowlist": project.bash_allowlist,
         }
         if project.system_prompt:
             data["system_prompt"] = project.system_prompt

@@ -129,10 +129,18 @@ def extract_commands(command_string: str) -> list[str]:
 
 
 def make_bash_security_hook(
-    allowed_commands: set[str],
+    allowed_commands: Optional[set[str]],
     restricted_project_dir: Optional[str] = None,
 ):
-    """Create a PreToolUse hook that validates bash commands against an allowlist."""
+    """
+    Create a PreToolUse hook that validates bash commands.
+
+    Args:
+        allowed_commands: Command names the project permits, or None to skip the
+            allowlist check entirely and let the project's settings.json
+            permissions be the only gate on which commands may run.
+        restricted_project_dir: When set, path arguments must stay inside it.
+    """
 
     async def _hook(input_data, tool_use_id=None, context=None):
         if input_data.get("tool_name") != "Bash":
@@ -142,13 +150,14 @@ def make_bash_security_hook(
         if not command:
             return {}
 
-        commands = extract_commands(command)
-        if not commands:
-            return {"decision": "block", "reason": f"Could not parse command: {command}"}
+        if allowed_commands is not None:
+            commands = extract_commands(command)
+            if not commands:
+                return {"decision": "block", "reason": f"Could not parse command: {command}"}
 
-        for cmd in commands:
-            if cmd not in allowed_commands:
-                return {"decision": "block", "reason": f"Command '{cmd}' is not allowed"}
+            for cmd in commands:
+                if cmd not in allowed_commands:
+                    return {"decision": "block", "reason": f"Command '{cmd}' is not allowed"}
 
         if restricted_project_dir:
             ok, reason = _validate_paths(command, restricted_project_dir)
