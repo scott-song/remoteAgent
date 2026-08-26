@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .attachments import attachment_store
 from .config import core_settings
 from .logging_config import get_logger
 
@@ -76,6 +77,16 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"[Session] Disconnect error: {e}")
             session.connected = False
+
+        # Attachments are held per (sender, chat) — the project is not part of
+        # that key. Purging unconditionally covers all three AC-13 triggers:
+        # session end, `/new` (which routes here), and the stale sweep below.
+        try:
+            removed = attachment_store.purge(user_id, chat_id)
+            if removed:
+                logger.info(f"[Session] Purged {removed} attachment(s) for {user_id[:8]}...")
+        except OSError as e:
+            logger.warning(f"[Session] Attachment purge failed: {e}")
 
     async def cleanup_stale(self):
         now = time.time()

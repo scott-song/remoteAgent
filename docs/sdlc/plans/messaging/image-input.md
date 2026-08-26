@@ -76,13 +76,13 @@ land together in the same PR — see the risk register.
 
 ### T6 — Purge attachments on session end, reset, and stale cleanup
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T1 — calls `purge()`
-- **Files**: `core/src/core/session_manager.py`
+- **Files**: `core/src/core/session_manager.py`, `core/tests/test_session_manager.py`, `core/tests/test_stream_handler.py`
 - **Design**: `§ Architecture → Integrates with` (the two lifecycle exits) · `§ Performance` (lazy reclamation)
 - **Covers**: AC-13 (full — completes T1)
 - **Risk**: low
-- **Notes**: call `purge(session.user_id, session.chat_id)` from `close()` (`:70`) so it covers all three AC-13 triggers at once — `/new` already routes through `close()` via `commands.py:145`, and `cleanup_stale()` (`:80`) calls `close()` per stale session. No change to `commands.py` is needed. Reclamation stays lazy by design: the sweep self-throttles to 300 s and only runs when a message arrives, which the design records as accepted.
+- **Notes**: `red: AttributeError — core.session_manager has no attribute 'attachment_store'` (5 tests). Also fixed fallout from T2 that the wave gate caught: `core/tests/test_stream_handler.py:14-27` stubs `lark_oapi.api.im.v1` with only the names `feishu_client` originally imported, so T2's four new imports broke its collection — the stub now lists them. Running that file alone had hidden it. call `purge(session.user_id, session.chat_id)` from `close()` (`:70`) so it covers all three AC-13 triggers at once — `/new` already routes through `close()` via `commands.py:145`, and `cleanup_stale()` (`:80`) calls `close()` per stale session. No change to `commands.py` is needed. Reclamation stays lazy by design: the sweep self-throttles to 300 s and only runs when a message arrives, which the design records as accepted.
 
 ### T7 — Record every receipt and the acknowledgement latency
 
@@ -120,5 +120,6 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 ## Build record  <!-- role-dev writes this during the build — empty at plan time -->
 
 - `W1 self-review @ 76deebd — 2 files · 0 critical, 0 important, 1 suggestion (chmod applied after write_bytes; brief default-perm window)`
+- `W2 self-review @ 8e43f60 — 6 files · 1 important FOUND AND FIXED IN-WAVE (test_stream_handler's lark stub broke on T2's new imports), 0 critical, 0 suggestions`
 
 ## Revisions  <!-- History -->
