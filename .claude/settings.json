@@ -17,7 +17,7 @@
     "ai-sdlc-c1-marketplace": {
       "source": {
         "source": "github",
-        "repo": "scott-song/ai-sdlc"
+        "repo": "aaxisdigital/ai-sdlc-c1"
       }
     }
   },
