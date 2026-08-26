@@ -113,7 +113,7 @@ class FeishuClient:
     Sends/updates messages via REST API with interactive cards.
     """
 
-    def __init__(self, app_id: str, app_secret: str):
+    def __init__(self, app_id: str, app_secret: str, accept_attachments: bool = False):
         self.app_id = app_id
         self.app_secret = app_secret
 
@@ -139,8 +139,17 @@ class FeishuClient:
         # Event loop for async work
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # Attachment holds; swappable for tests
+        # Attachment holds; swappable for tests. Opt-in per bot: a consumer with
+        # no drain path (no take/purge) would accumulate images forever, so the
+        # default is off and the coder bot turns it on explicitly (F-5).
         self.attachments = attachment_store
+        self.accept_attachments = accept_attachments
+
+        # In-flight receives per (sender, chat). A text message arriving while a
+        # download is still running must wait for it, or it drains an empty hold
+        # and the image lands on the *next*, unrelated message (F-1).
+        self._inflight: dict[str, list[Any]] = {}
+        self._inflight_lock = threading.Lock()
 
     def on_message(self, callback: Callable):
         """Register callback.
@@ -229,7 +238,7 @@ class FeishuClient:
                 for mention in message.mentions:
                     text = text.replace(mention.key, "").strip()
 
-            image_keys = _extract_image_keys(msg_type, content)
+            image_keys = _extract_image_keys(msg_type, content) if self.accept_attachments else []
             if image_keys:
                 if self._loop is None:
                     logger.error("[Feishu] No loop available — cannot fetch attachment")
@@ -239,13 +248,24 @@ class FeishuClient:
                     f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: "
                     f"{len(image_keys)} image(s) + {len(text)} chars"
                 )
-                asyncio.run_coroutine_threadsafe(
+                job = asyncio.run_coroutine_threadsafe(
                     self._handle_attachments(data, chat_id, sender_id, sender_name, text),
                     self._loop,
                 )
+                self._track_inflight(sender_id, chat_id, job)
                 return
 
             if not text:
+                return
+
+            # A text message from a sender whose download is still running must
+            # not drain the hold yet — deliver it behind that receive (F-1).
+            waiting = self._inflight_for(sender_id, chat_id)
+            if waiting and self._loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self._deliver_after(waiting, chat_id, sender_id, sender_name, text, message_id),
+                    self._loop,
+                )
                 return
 
             logger.info(f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: {text}")
@@ -255,6 +275,47 @@ class FeishuClient:
 
         except Exception as e:
             logger.error(f"[Feishu] Error handling message: {e}", exc_info=True)
+
+    def _track_inflight(self, sender_id: str, chat_id: str, job: Any) -> None:
+        key = f"{sender_id}:{chat_id}"
+        with self._inflight_lock:
+            self._inflight.setdefault(key, []).append(job)
+
+        def _done(_f: Any, k: str = key) -> None:
+            with self._inflight_lock:
+                jobs = [j for j in self._inflight.get(k, []) if not j.done()]
+                if jobs:
+                    self._inflight[k] = jobs
+                else:
+                    self._inflight.pop(k, None)
+
+        job.add_done_callback(_done)
+
+    def _inflight_for(self, sender_id: str, chat_id: str) -> list[Any]:
+        with self._inflight_lock:
+            return [j for j in self._inflight.get(f"{sender_id}:{chat_id}", []) if not j.done()]
+
+    async def _deliver_after(
+        self,
+        jobs: list[Any],
+        chat_id: str,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        message_id: str,
+    ) -> None:
+        """Invoke the callback once this sender's in-flight receives have settled.
+
+        A failed receive must not swallow the user's message, so each wait is
+        independent and its error is logged, never raised.
+        """
+        for job in jobs:
+            try:
+                await asyncio.wrap_future(job)
+            except Exception as e:
+                logger.warning(f"[Feishu] In-flight receive failed before delivery: {e}")
+        if self._on_message_callback:
+            self._on_message_callback(chat_id, sender_id, sender_name, text, message_id, [])
 
     async def _handle_attachments(
         self, data: Any, chat_id: str, sender_id: str, sender_name: str, text: str
@@ -279,7 +340,7 @@ class FeishuClient:
 
         for key in keys:
             try:
-                payload, reason = await loop.run_in_executor(
+                payload, reason, observed = await loop.run_in_executor(
                     None, self.download_resource, message_id, key
                 )
             except Exception as e:
@@ -290,7 +351,7 @@ class FeishuClient:
 
             if payload is None:
                 self._log_receipt(
-                    f"rejected:{reason or 'failed'}", sender_id, chat_id, 0, message_id
+                    f"rejected:{reason or 'failed'}", sender_id, chat_id, observed, message_id
                 )
                 failures.append(reason or "failed")
                 continue
@@ -512,12 +573,15 @@ class FeishuClient:
 
     def download_resource(
         self, message_id: str, file_key: str, *, max_bytes: int = IMAGE_MAX_BYTES
-    ) -> tuple[bytes | None, str | None]:
+    ) -> tuple[bytes | None, str | None, int]:
         """Fetch a message resource's bytes.
 
-        Returns ``(data, None)`` on success, else ``(None, reason)`` where reason
-        is ``"too_large"`` (AC-7) or ``"failed"`` (AC-8) — the two cases carry
-        different user-facing replies, so they must stay distinguishable.
+        Returns ``(data, None, size)`` on success, else ``(None, reason, size)``
+        where reason is ``"too_large"`` (AC-7) or ``"failed"`` (AC-8) — the two
+        carry different user-facing replies, so they must stay distinguishable.
+
+        ``size`` is the byte count actually observed, which AC-14 needs on the
+        rejection path too: for ``"too_large"`` the size *is* the reason.
 
         Reads at most ``max_bytes + 1`` so an oversized resource is rejected
         without ever being fully buffered.
@@ -542,20 +606,20 @@ class FeishuClient:
                 time.sleep(UPDATE_RETRY_DELAY)
 
         if not (response and response.success()):
-            return None, "failed"
+            return None, "failed", 0
 
         stream = getattr(response, "file", None)
         if stream is None:
             logger.warning(f"[Feishu] Resource {file_key[:8]}... returned no stream")
-            return None, "failed"
+            return None, "failed", 0
 
         data = stream.read(max_bytes + 1)
         if len(data) > max_bytes:
             logger.warning(
                 f"[Feishu] Resource {file_key[:8]}... exceeds {max_bytes} bytes — rejected"
             )
-            return None, "too_large"
-        return data, None
+            return None, "too_large", len(data)
+        return data, None, len(data)
 
     @staticmethod
     def _log_receipt(
@@ -588,8 +652,14 @@ class FeishuClient:
             )
             .build()
         )
-        response = self.lark_client.im.v1.message_reaction.create(request)
-        if response.success():
-            return True
-        logger.warning(f"[Feishu] Reaction failed: {response.code} - {response.msg}")
+        for attempt in range(1 + UPDATE_MAX_RETRIES):
+            response = self.lark_client.im.v1.message_reaction.create(request)
+            if response.success():
+                return True
+            logger.warning(
+                f"[Feishu] Reaction failed (attempt {attempt + 1}): "
+                f"{response.code} - {response.msg}"
+            )
+            if attempt < UPDATE_MAX_RETRIES:
+                time.sleep(UPDATE_RETRY_DELAY)
         return False

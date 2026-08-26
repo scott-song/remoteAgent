@@ -202,7 +202,7 @@ def stack(tmp_path, monkeypatch):
         from core.feishu_client import FeishuClient
 
         bot = ClaudeWorkspaceBot()
-        feishu = FeishuClient("e2e", "e2e")
+        feishu = FeishuClient("e2e", "e2e", accept_attachments=True)
         feishu.attachments = store
         feishu._loop = bot.loop
         bot.feishu = feishu
@@ -217,7 +217,7 @@ def stack(tmp_path, monkeypatch):
         feishu.react = MagicMock(side_effect=lambda mid, **kw: s.reactions.append(mid) or True)
         s.sent: list[str] = []
         s.sent_id = lambda text: (s.sent.append(text), "srv1")[1]
-        feishu.download_resource = MagicMock(return_value=(solid_png(), None))
+        feishu.download_resource = MagicMock(return_value=(solid_png(), None, len(solid_png())))
         FakeClaude.last_query = ""
         yield s
         bot.loop.call_soon_threadsafe(bot.loop.stop)
@@ -305,7 +305,7 @@ class TestFailurePaths:
     async def test_e2e_AC_7_an_oversized_image_is_rejected_on_receipt(self, stack):
         """Given a user in a chat bound to a project, when they send an image
         larger than 10 MB, then nothing is held and no agent turn starts."""
-        stack.feishu.download_resource = MagicMock(return_value=(None, "too_large"))
+        stack.feishu.download_resource = MagicMock(return_value=(None, "too_large", 11534336))
 
         await stack.deliver(image_event())
 
@@ -316,7 +316,7 @@ class TestFailurePaths:
     async def test_e2e_AC_8_a_failed_download_is_reported_not_swallowed(self, stack):
         """Given Feishu returning an error for the image's content, when the bot
         tries to receive the image, then nothing is held and the user is told."""
-        stack.feishu.download_resource = MagicMock(return_value=(None, "failed"))
+        stack.feishu.download_resource = MagicMock(return_value=(None, "failed", 0))
 
         await stack.deliver(image_event())
 
@@ -400,7 +400,7 @@ class TestAuditTrail:
         import logging
 
         payload = solid_png()
-        stack.feishu.download_resource = MagicMock(return_value=(payload, None))
+        stack.feishu.download_resource = MagicMock(return_value=(payload, None, len(payload)))
 
         with caplog.at_level(logging.INFO):
             await stack.deliver(image_event())
