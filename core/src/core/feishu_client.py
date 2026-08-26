@@ -16,14 +16,19 @@ from typing import Any, Callable, Optional
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    Emoji,
+    GetMessageResourceRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
 
+from .attachments import ACK_EMOJI, IMAGE_MAX_BYTES
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -361,3 +366,75 @@ class FeishuClient:
             )
             if attempt < UPDATE_MAX_RETRIES:
                 time.sleep(UPDATE_RETRY_DELAY)
+
+    # ── Attachments ───────────────────────────────────────
+
+    def download_resource(
+        self, message_id: str, file_key: str, *, max_bytes: int = IMAGE_MAX_BYTES
+    ) -> tuple[bytes | None, str | None]:
+        """Fetch a message resource's bytes.
+
+        Returns ``(data, None)`` on success, else ``(None, reason)`` where reason
+        is ``"too_large"`` (AC-7) or ``"failed"`` (AC-8) — the two cases carry
+        different user-facing replies, so they must stay distinguishable.
+
+        Reads at most ``max_bytes + 1`` so an oversized resource is rejected
+        without ever being fully buffered.
+        """
+        request = (
+            GetMessageResourceRequest.builder()
+            .message_id(message_id)
+            .file_key(file_key)
+            .type("image")
+            .build()
+        )
+        response = None
+        for attempt in range(1 + UPDATE_MAX_RETRIES):
+            response = self.lark_client.im.v1.message_resource.get(request)
+            if response.success():
+                break
+            logger.warning(
+                f"[Feishu] Resource fetch failed (attempt {attempt + 1}): "
+                f"{response.code} - {response.msg}"
+            )
+            if attempt < UPDATE_MAX_RETRIES:
+                time.sleep(UPDATE_RETRY_DELAY)
+
+        if not (response and response.success()):
+            return None, "failed"
+
+        stream = getattr(response, "file", None)
+        if stream is None:
+            logger.warning(f"[Feishu] Resource {file_key[:8]}... returned no stream")
+            return None, "failed"
+
+        data = stream.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            logger.warning(
+                f"[Feishu] Resource {file_key[:8]}... exceeds {max_bytes} bytes — rejected"
+            )
+            return None, "too_large"
+        return data, None
+
+    def react(self, message_id: str, emoji_type: str = ACK_EMOJI) -> bool:
+        """Add one emoji reaction to a message.
+
+        Returns False on failure and **never** falls back to a reply: AC-3
+        acknowledges receipt without adding a chat message, so a failed
+        acknowledgement stays in the log.
+        """
+        request = (
+            CreateMessageReactionRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+                .build()
+            )
+            .build()
+        )
+        response = self.lark_client.im.v1.message_reaction.create(request)
+        if response.success():
+            return True
+        logger.warning(f"[Feishu] Reaction failed: {response.code} - {response.msg}")
+        return False

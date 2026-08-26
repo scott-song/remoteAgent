@@ -36,13 +36,13 @@ land together in the same PR — see the risk register.
 
 ### T2 — Add the two outbound Feishu calls: resource download and reaction
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T1 — imports `IMAGE_MAX_BYTES` and `ACK_EMOJI`
-- **Files**: `core/src/core/feishu_client.py`
+- **Files**: `core/src/core/feishu_client.py`, `core/tests/test_feishu_client.py`
 - **Design**: `§ Backend API` (both signature snippets, the error table)
 - **Covers**: AC-3 (partial — the bare-image branch is T3), AC-7 (full), AC-8 (partial — the reply is T3)
 - **Risk**: medium — `ACK_EMOJI = "EYES"` is unverified against Feishu's `emoji_type` set; an invalid value makes AC-3's acknowledgement silently never appear.
-- **Notes**: `download_resource` reads at most `max_bytes + 1` so an oversized image is never fully buffered (AC-7), and returns `None` as the single failure signal (AC-8). Reuse the existing `UPDATE_MAX_RETRIES` / `UPDATE_RETRY_DELAY` loop — do not invent a second retry policy. `react` returns `bool` and **never** escalates a failure to a chat reply, because AC-3 forbids a message. Verify the emoji value against the live API as part of this task and record the confirmed value.
+- **Notes**: `red: AttributeError: 'FeishuClient' object has no attribute 'react'` (10 new tests failing before implementation). **Design divergence, corrected in the design in this step**: `download_resource` returns `tuple[bytes | None, str | None]`, not `bytes | None` — AC-7 and AC-8 carry different replies, so oversize and failure must stay distinguishable at the call boundary. `download_resource` reads at most `max_bytes + 1` so an oversized image is never fully buffered (AC-7), and returns `None` as the single failure signal (AC-8). Reuse the existing `UPDATE_MAX_RETRIES` / `UPDATE_RETRY_DELAY` loop — do not invent a second retry policy. `react` returns `bool` and **never** escalates a failure to a chat reply, because AC-3 forbids a message. Verify the emoji value against the live API as part of this task and record the confirmed value.
 
 ### T3 — Widen the event path to carry attachments
 

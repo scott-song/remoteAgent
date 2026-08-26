@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from core.attachments import ACK_EMOJI
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -540,3 +543,147 @@ class TestSendMessageChunking:
 
         assert result == "msg_ok"
         assert client.lark_client.im.v1.message.create.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# download_resource / react  (T2 — AC-3, AC-7, AC-8)
+# ---------------------------------------------------------------------------
+
+
+def _resource_response(payload: bytes | None, ok: bool = True):
+    """Mock a GetMessageResourceResponse, whose `.file` is a readable stream."""
+    response = MagicMock()
+    response.success.return_value = ok
+    response.code = 0 if ok else 234001
+    response.msg = "ok" if ok else "resource not found"
+    response.file = io.BytesIO(payload) if payload is not None else None
+    return response
+
+
+class TestDownloadResource:
+    def test_int_AC_7_an_image_over_the_cap_is_rejected(self):
+        """Given a user sends an image larger than 10 MB, when the bot receives it,
+        then nothing is held — the call reports the size, not a generic failure."""
+        client = _make_client()
+        oversized = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+        client.lark_client.im.v1.message_resource.get.return_value = _resource_response(oversized)
+
+        data, reason = client.download_resource("msg_1", "img_1", max_bytes=16)
+
+        assert data is None
+        assert reason == "too_large"
+
+    def test_a_payload_at_the_cap_is_accepted(self):
+        client = _make_client()
+        exact = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8  # 16 bytes
+        client.lark_client.im.v1.message_resource.get.return_value = _resource_response(exact)
+
+        data, reason = client.download_resource("msg_1", "img_1", max_bytes=16)
+
+        assert data == exact
+        assert reason is None
+
+    def test_oversized_payload_is_not_fully_buffered(self):
+        """The read must stop at max_bytes + 1 so a huge image never lands in
+        memory (design § Performance — the budget holds because of the cap)."""
+        client = _make_client()
+        stream = MagicMock()
+        stream.read.return_value = b"x" * 17
+        response = MagicMock()
+        response.success.return_value = True
+        response.file = stream
+        client.lark_client.im.v1.message_resource.get.return_value = response
+
+        client.download_resource("msg_1", "img_1", max_bytes=16)
+
+        stream.read.assert_called_once_with(17)
+
+    def test_int_AC_8_a_failed_download_is_reported_distinctly(self):
+        """Given Feishu errors for the image's content, when the bot tries to
+        receive it, then the failure is distinguishable from an oversize reject."""
+        client = _make_client()
+        client.lark_client.im.v1.message_resource.get.return_value = _resource_response(
+            None, ok=False
+        )
+
+        with patch("core.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            data, reason = client.download_resource("msg_1", "img_1")
+
+        assert data is None
+        assert reason == "failed"
+
+    def test_download_retries_then_succeeds(self):
+        client = _make_client()
+        client.lark_client.im.v1.message_resource.get.side_effect = [
+            _resource_response(None, ok=False),
+            _resource_response(b"\x89PNG\r\n\x1a\n"),
+        ]
+
+        with patch("core.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            data, reason = client.download_resource("msg_1", "img_1")
+
+        assert data == b"\x89PNG\r\n\x1a\n"
+        assert reason is None
+        assert client.lark_client.im.v1.message_resource.get.call_count == 2
+
+    def test_a_successful_response_with_no_stream_is_a_failure(self):
+        client = _make_client()
+        client.lark_client.im.v1.message_resource.get.return_value = _resource_response(None)
+
+        data, reason = client.download_resource("msg_1", "img_1")
+
+        assert data is None
+        assert reason == "failed"
+
+    def test_never_logs_the_bytes(self, caplog):
+        """BR-7 — logs record that an image arrived, never its content."""
+        client = _make_client()
+        secret = b"\x89PNG\r\n\x1a\nSUPERSECRETPIXELS"
+        client.lark_client.im.v1.message_resource.get.return_value = _resource_response(secret)
+
+        with caplog.at_level(logging.DEBUG):
+            client.download_resource("msg_1", "img_1")
+
+        assert "SUPERSECRETPIXELS" not in caplog.text
+
+
+class TestReact:
+    def test_int_AC_3_receipt_is_acknowledged_with_a_reaction(self):
+        """Given a message containing only an image, when the bot receives it, then
+        it adds an emoji reaction — this is the call that does it."""
+        client = _make_client()
+        response = MagicMock()
+        response.success.return_value = True
+        client.lark_client.im.v1.message_reaction.create.return_value = response
+
+        assert client.react("msg_1") is True
+        assert client.lark_client.im.v1.message_reaction.create.call_count == 1
+
+    def test_uses_the_configured_ack_emoji(self):
+        client = _make_client()
+        response = MagicMock()
+        response.success.return_value = True
+        client.lark_client.im.v1.message_reaction.create.return_value = response
+
+        with patch("core.feishu_client.Emoji") as emoji_cls:
+            builder = MagicMock()
+            emoji_cls.builder.return_value = builder
+            builder.emoji_type.return_value = builder
+            client.react("msg_1")
+
+        builder.emoji_type.assert_called_once_with(ACK_EMOJI)
+
+    def test_a_failed_reaction_never_becomes_a_chat_message(self):
+        """AC-3 forbids a reply, so a failed acknowledgement stays in the log."""
+        client = _make_client()
+        response = MagicMock()
+        response.success.return_value = False
+        response.code = 230001
+        response.msg = "invalid emoji"
+        client.lark_client.im.v1.message_reaction.create.return_value = response
+
+        assert client.react("msg_1") is False
+        assert client.lark_client.im.v1.message.reply.call_count == 0
+        assert client.lark_client.im.v1.message.create.call_count == 0

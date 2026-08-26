@@ -120,11 +120,13 @@ Per call — a signature snippet in the `lark-oapi` builder idiom used throughou
 # GET /open-apis/im/v1/messages/:message_id/resources/:file_key?type=image
 def download_resource(
     self, message_id: str, file_key: str, *, max_bytes: int = IMAGE_MAX_BYTES
-) -> bytes | None:
-    """Return the resource bytes, or None when Feishu errors or the cap is exceeded.
+) -> tuple[bytes | None, str | None]:
+    """Return (data, None) on success, else (None, reason).
 
-    Reads at most max_bytes + 1 so an oversized image is rejected without ever
-    being fully buffered (AC-7); None is the single failure signal (AC-8).
+    reason is "too_large" (AC-7) or "failed" (AC-8). The two cases carry
+    different user-facing replies, so a single None would conflate them.
+    Reads at most max_bytes + 1 so an oversized image is never fully
+    buffered.
     """
 ```
 
