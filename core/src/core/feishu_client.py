@@ -45,6 +45,14 @@ CARD_MAX_BYTES = 25_000
 UPDATE_MAX_RETRIES = 2
 UPDATE_RETRY_DELAY = 0.5  # seconds
 
+# How long a text message waits for this sender's in-flight image receives
+# before being delivered anyway (review F-14). A stuck Feishu call can burn
+# ~90s (30s timeout x 3 attempts); waiting that long leaves the user with no
+# reply at all, which is worse than the missing-image answer the wait exists to
+# prevent. Bounded here, so the failure degrades to "visible and wrong" rather
+# than "silent".
+DELIVERY_GRACE_SECONDS = 3.0
+
 
 def build_action_buttons(has_code_changes: bool = True) -> str:
     """Build markdown action buttons for the end of a response card.
@@ -150,6 +158,12 @@ class FeishuClient:
         # and the image lands on the *next*, unrelated message (F-1).
         self._inflight: dict[str, list[Any]] = {}
         self._inflight_lock = threading.Lock()
+
+        # Serializes attachment handling per (sender, chat) on the bot loop, so
+        # two receives from one sender cannot settle out of order and deliver a
+        # callback that sees only its own image (review F-13). Loop-only, so an
+        # asyncio lock is the right primitive and needs no thread lock.
+        self._key_locks: dict[str, asyncio.Lock] = {}
 
     def on_message(self, callback: Callable):
         """Register callback.
@@ -309,11 +323,17 @@ class FeishuClient:
         A failed receive must not swallow the user's message, so each wait is
         independent and its error is logged, never raised.
         """
-        for job in jobs:
-            try:
-                await asyncio.wrap_future(job)
-            except Exception as e:
-                logger.warning(f"[Feishu] In-flight receive failed before delivery: {e}")
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(asyncio.wrap_future(job) for job in jobs), return_exceptions=True),
+                timeout=DELIVERY_GRACE_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                f"[Feishu] Delivering {message_id} after {DELIVERY_GRACE_SECONDS}s without its "
+                "in-flight image(s) — a pending receive is slow; the text goes through rather "
+                "than leaving the sender with no reply"
+            )
         if self._on_message_callback:
             self._on_message_callback(chat_id, sender_id, sender_name, text, message_id, [])
 
@@ -329,6 +349,32 @@ class FeishuClient:
         message = data.event.message
         message_id = message.message_id
         content = json.loads(message.content)
+
+        # One receive at a time per sender+chat: a captioned post that finished
+        # first would otherwise hand the callback only its own image, leaving an
+        # earlier paste to ride the next, unrelated message (F-13).
+        key = f"{sender_id}:{chat_id}"
+        lock = self._key_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            await self._receive_attachments(
+                data, message_id, content, chat_id, sender_id, sender_name, text, started
+            )
+        if not lock.locked():
+            self._key_locks.pop(key, None)
+
+    async def _receive_attachments(
+        self,
+        data: Any,
+        message_id: str,
+        content: dict,
+        chat_id: str,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        started: float,
+    ) -> None:
+        """Download, hold and acknowledge — serialized per sender by the caller."""
+        message = data.event.message
 
         # Cap downloads per message, not just per prompt: a post can embed
         # arbitrarily many images, and the cap must bound transfer.
@@ -351,7 +397,12 @@ class FeishuClient:
 
             if payload is None:
                 self._log_receipt(
-                    f"rejected:{reason or 'failed'}", sender_id, chat_id, observed, message_id
+                    f"rejected:{reason or 'failed'}",
+                    sender_id,
+                    chat_id,
+                    observed,
+                    message_id,
+                    size_is_floor=(reason == "too_large"),
                 )
                 failures.append(reason or "failed")
                 continue
@@ -384,10 +435,13 @@ class FeishuClient:
                 )
             return
 
+        # Everything received is already held, so the callback carries NOTHING
+        # inline and the consumer's single `take()` is the only drain. Passing
+        # them inline as well double-attached a captioned post's own image —
+        # once from the store, once from the callback — costing double vision
+        # tokens and two of the five cap slots.
         if self._on_message_callback:
-            self._on_message_callback(
-                chat_id, sender_id, sender_name, text, message_id, attachments
-            )
+            self._on_message_callback(chat_id, sender_id, sender_name, text, message_id, [])
 
     # ── Send / Update Messages ────────────────────────────
 
@@ -623,16 +677,26 @@ class FeishuClient:
 
     @staticmethod
     def _log_receipt(
-        disposition: str, sender_id: str, chat_id: str, size: int, message_id: str
+        disposition: str,
+        sender_id: str,
+        chat_id: str,
+        size: int,
+        message_id: str,
+        size_is_floor: bool = False,
     ) -> None:
         """One line per accepted or rejected attachment (AC-14).
 
         Carries the disposition, sender, chat and size — never the bytes, and
         never a path to a copy kept only for logging (BR-7).
+
+        ``size_is_floor`` renders ``size>=N``: an oversized read stops at
+        ``max_bytes + 1``, so the true size is unknown and reporting that bound
+        as an exact figure would be a lie (review F-15).
         """
+        rendered = f"size>={size}" if size_is_floor else f"size={size}"
         logger.info(
             f"[Feishu] attachment {disposition} sender={sender_id[:8]} "
-            f"chat={chat_id[:8]} size={size} msg={message_id}"
+            f"chat={chat_id[:8]} {rendered} msg={message_id}"
         )
 
     def react(self, message_id: str, emoji_type: str = ACK_EMOJI) -> bool:

@@ -341,6 +341,23 @@ never withholds the text. When nothing is in flight the direct path is untouched
 AC-4 byte-identical. Rejected alternative: a fixed grace-sleep before every drain — simpler, but it
 taxes every text message for a case that is usually absent.
 
+**Bounding that wait, and one drain (review round 2).** Three refinements the first attempt got wrong:
+
+- **The wait is bounded** (`DELIVERY_GRACE_SECONDS`, 3s) and the jobs are awaited **concurrently**. lark's
+  HTTP timeout is 30s and the retry loop runs three attempts, so an unbounded sequential wait could
+  leave a sender with **no reply at all** for minutes — converting a visible wrong answer into silence,
+  which is strictly worse. On timeout the text is delivered without its image, degrading back to the
+  visible failure rather than the silent one.
+- **Receives serialize per `(sender, chat)`** on the bot loop. Without that, a captioned post whose
+  download finished first delivered a turn carrying only its own image, leaving an earlier paste to ride
+  the next unrelated message — F-1's failure through a second door.
+- **The store is the single drain.** Received images are always held, and the callback carries nothing
+  inline; the consumer's one `take()` provides everything. Passing them inline *as well* double-attached
+  a captioned post's own image — once from the store, once from the callback — costing double vision
+  tokens and two of the five cap slots. No test caught it until the serialization test forced the
+  arithmetic into the open, because every earlier assertion counted the callback's argument rather than
+  the prompt.
+
 **Caching / pagination / async** — **no cache** (the default; an attachment is read at most once, so a
 cache would add invalidation risk for no hit rate). Pagination `n/a — no list surface`. Async: the
 receive path is offloaded as above; **no queue or broker is introduced** (that would be a system-level

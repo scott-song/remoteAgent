@@ -2,7 +2,7 @@
 
 > Owner: Planner → Dev (live updates) · Status: approved
 > Spec: `docs/sdlc/specs/messaging/image-input.md` · Spec version targeted: `h1:b82962101050`
-> Design: `docs/sdlc/designs/messaging/image-input.md` · Design version targeted: `h1:b506e9264aab`
+> Design: `docs/sdlc/designs/messaging/image-input.md` · Design version targeted: `h1:e0e0bba14e61`
 
 ## Approach  <!-- Context -->
 
@@ -136,3 +136,4 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 
 - `2026-08-26 — design update: download_resource returns a reason alongside the bytes so AC-7 and AC-8 stay distinguishable; no task or AC impact.`
 - `2026-08-26 — review round 1: F-1..F-5 fixed forward on main; F-4 recorded as an explicit deferral rather than a completed verification.`
+- `2026-08-26 — review round 2: F-13/F-14/F-18 fixed forward, plus a double-attach bug the round-2 tests surfaced; design re-anchored.`

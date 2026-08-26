@@ -267,3 +267,191 @@ carry the Suggestions**, on 2026-08-26.
 
 Gates after the fixes, at the tree these were landed on: suite **412/412**, coverage **95%**,
 `make typecheck` clean, `ruff check` and `ruff format` clean.
+
+---
+
+# Review: messaging/image-input — Round 2 (delta)
+
+> Reviewer: implementation-reviewer subagent · Verdict: NEEDS CHANGES
+> Round: 2 · Reviewed at: ad8227f68637abf9b8974895c87b1e1625c2d057
+> Delta scope: `git diff 3211aa8..HEAD` — the round-1 fix batch (`f6824df`) and its blast radius.
+> Round 1's report, verdict and Disposition above are untouched.
+
+> **Already merged again.** The fix batch is on `main`; nothing here can gate. Required-changes rows
+> are follow-up commits.
+
+## Summary
+
+All five Important findings are **fixed**, and I could not break the central one: I attacked the F-1
+concurrency from four directions and the guard holds — lark dispatches events strictly serially, so
+the schedule-then-track window I expected does not exist. What the fix does not cover is the sibling
+path: an image followed by a **captioned post** still races (F-13), and the wait it introduces has no
+timeout or fallback, so a stalled receive now silently withholds that sender's messages for up to
+~3 minutes where before they arrived immediately minus the image (F-14). Separately, two step-1 gates
+genuinely fail this round: the plan's design anchor is stale, and the tester's E2E evidence now
+predates the code (F-18).
+
+## 1. Freshness (round 2)
+
+- **Upstreams approved** ✅ `spec_status=approved · design_status=approved · plan_status=approved`,
+  `tasks_total=7 tasks_open=0`, `report_signoff=passed`.
+- **Chain fresh** ❌ **`sdlc-freshness` reports `DRIFTED plan→design`** (`fresh 3 · DRIFTED 1`). The
+  fix batch edited the design (*Consumers*, *Performance*, *Backend API* snippet, *Open questions*)
+  but left the plan's header at `Design version targeted: h1:b506e9264aab`
+  (`docs/sdlc/plans/messaging/image-input.md:5`). The plan's content edits are correct — only the
+  anchor was not re-stamped. **Routes to `role-planner`**: re-stamp the design anchor. Cheap, but it
+  is a real drift and it will keep failing every downstream freshness check until done.
+- **Report about THIS code** ❌ `code_moved=5 · report_at_head=false · blockers=report_at_head ·
+  verdict=blocked`. Unlike round 1 — where the only movement was an unrelated uncommitted settings
+  file — this is genuine: `feishu_client.py`, `bots/coder/src/coder/main.py` and the tester's own
+  `test_e2e_image_input.py` all moved above the report's stamp (`9e0ce9f`). Carried as **F-18** and
+  routed to `role-tester`.
+- **Judgement call, stated plainly**: step 1 says a failed gate means "not ready for review, diff
+  unopened". I continued instead, because a fix batch landing above the tester's stamp is the
+  *ordinary* shape of a round-2 review — refusing on it would make delta mode unreachable, and the
+  coordinator dispatched this review of the fix batch explicitly. Neither failed gate is silenced:
+  both are named above with their owner, and the E2E staleness is a Required-changes row.
+- **`sdlc-audit-facts` `verdict=discrepancies`** ✅ resolved by hand, unchanged from round 1 — the two
+  `evidence_missing=` rows are bare filenames in prose (`core/tests/test_attachments.py` exists;
+  `sessions.json` is the runtime file at `session_manager.py:23`). Every gating field is empty.
+- **Security gate** — still NOT RUN, still no scanner configured. Recorded as an unverifiable gate,
+  not assumed green. Not re-raised (round 1's known limitation).
+- `sdlc-stage-clock` works this round (`stage=review`).
+
+## 2. Completeness (round 2)
+
+The chain is unchanged — no AC was added, removed or re-mapped, and `sdlc-audit-facts` still reports
+`ac_no_integration=` / `ac_no_e2e=` / `ac_not_in_matrix=` / `ac_not_in_report=` / `report_not_passing=`
+all empty across 14 ACs. The matrix needs no regeneration: the fix batch added tests under existing
+AC ids (`int_AC_1_text_waits_for_an_in_flight_receive`,
+`int_AC_14_an_oversized_rejection_records_its_size`) and renamed none.
+
+**Dev-layer suites**: `.venv/bin/python -m pytest core/tests/ bots/coder/tests/ bots/hr/tests/
+--ignore=bots/coder/tests/test_e2e_image_input.py` — **398 passed, 0 failed** (7.2 s). 398 + the 14
+E2E = **412**, corroborating the coordinator's claim. `make typecheck` → clean. `ruff check` → clean.
+No suppression appears anywhere in the delta.
+**E2E**: `not trusted this round` — the specs still pass, but they were edited by `role-dev` in this
+batch and no tester re-run or refreshed report exists (F-18). I do not execute E2E.
+
+## 3. Code review (delta only)
+
+### Prior findings — verification
+
+| ID | Status | Evidence |
+|---|---|---|
+| **F-1** | **fixed** | `feishu_client.py:251` tracks the job; `:257-266` diverts a text message from a sender with a pending receive onto `_deliver_after`; `:279-306` implement track/query/wait. `int_AC_1_text_waits_for_an_in_flight_receive` pins it and would fail deterministically if the guard were removed — unguarded, `_on_event` calls the callback **inline**, so `cb.call_count` would be 1 before the test's first `sleep(0)`. Residuals raised as F-13, F-14. |
+| **F-2** | **fixed** | `feishu_client.py:655-665` — `for attempt in range(1 + UPDATE_MAX_RETRIES)` with `UPDATE_RETRY_DELAY` between, exactly the file's existing idiom (`:384, :415, :459, :495, :533`), matching the design's budget of "up to 2 retries × 0.5 s". Both new tests are real: the exhaust test's `message.reply.call_count == 0` is a genuine guard, not a vacuous one, because `FeishuClient.reply` does route through `lark_client.im.v1.message.reply`. |
+| **F-3** | **fixed** | `download_resource` returns `tuple[bytes | None, str | None, int]` (`:573-624`), `observed` reaches `_log_receipt` on the rejection path (`:351-354`), and the accepted-path assertion is tightened to `size=32`. Every one of the ~10 unpack sites and mocks was updated (the suite proves it). Residuals raised as F-15, F-16. |
+| **F-4** | **fixed — as an honest deferral, which is what I asked for** | Judged against reality, the artifacts now describe it: plan T2 *Notes* state **"DEFERRED, NOT DONE … This task is `[x]` for the code it landed, not for that verification"**; the risk register carries a bullet saying its own named mitigation did not happen; the design's *Open questions* reads **"NOT VERIFIED — deferred, explicitly"** with `Owner: @user, at the first live Feishu pass`. Nothing now claims a check that was not run, and the owner moved from `@dev` (who cannot do it) to `@user` (who can). |
+| **F-5** | **fixed** | Default is off (`feishu_client.py:116`), gated at the single decision point (`:241`), and I verified every construction site rather than trusting it: `bots/coder/src/coder/main.py:36-43` opts in, `bots/hr/src/hr/main.py:27` does not, `test_e2e_image_input.py:205` opts in, `core/tests/test_feishu_client.py:35` opts in via `_make_client`. `test_the_default_is_opt_out` pins the default. **HR is genuinely inert**: with the flag off a bare `image` yields `image_keys=[]` then `if not text: return` — no download, no `put`, no `react`, no audit line, no disk. The design's *Consumers* section now records the two-consumer consequence it had missed. |
+| F-6 … F-12 | **carried, open** | Per the user's decision; not re-raised. I checked whether any fix made one worse: **none did.** `attachments.py` is untouched this batch (F-6, F-7 unchanged); F-8, F-9, F-10, F-11 unchanged. F-12 is marginally *better* — the design's new *Consumers* paragraph now states in writing that an opt-out consumer still receives a captioned post's text. |
+
+### A. Implementation correctness — the F-1 concurrency, attacked
+
+The coordinator asked for this specifically, so here is each attack and its outcome.
+
+- **Attack 1 — the schedule-then-track window.** `_on_event` does `job = run_coroutine_threadsafe(...)`
+  then `_track_inflight(...)`. If a text event could be handled between those two statements it would
+  see an empty `_inflight` and take the direct path, losing the image. **Attack fails, and cleanly**:
+  `lark_oapi/ws/client.py:291-314` calls `self._event_handler._do_without_validation(pl)`
+  **synchronously inline** from `_handle_data_frame`, so `_on_event` invocations are strictly
+  serialized on lark's own loop — two of them can never overlap, and nothing can run between those
+  two statements. Not a latent window, an impossible one. Worth recording *why* it is safe, because
+  the safety comes from a third-party dispatch property, not from this code.
+- **Attack 2 — lock discipline / self-deadlock.** `_track_inflight` releases `_inflight_lock` **before**
+  calling `add_done_callback` (`:280-292`). That ordering is load-bearing: if the job is already
+  complete, `concurrent.futures.Future.add_done_callback` runs the callback *immediately on the calling
+  thread*, and `_done` re-acquires the same non-reentrant `threading.Lock`. Inside the `with` block
+  that would be an instant deadlock on the WS thread. As written it is correct.
+- **Attack 3 — key leak.** Cannot leak. `_done` recomputes the surviving jobs **under the lock**
+  (`:285-290`), so a job appended concurrently is seen and kept rather than dropped, and the key is
+  popped only when nothing live remains. `setdefault` recreates a key popped earlier. A key can briefly
+  survive holding only completed jobs, which `_inflight_for` filters to `[]` — harmless, and bounded by
+  distinct senders. The coordinator's claim holds.
+- **Attack 4 — `done()` vs the hold actually existing.** `job` wraps the whole `_handle_attachments`
+  coroutine, so `job.done()` implies `put()` has already returned. The ordering primitive is therefore
+  sufficient for the property F-1 was about. ✅
+- **Two side effects worth naming, neither a finding.** (i) For the queued-text case the ack `reply()`
+  now runs on the bot loop instead of lark's WS loop, which *reduces* WS-loop blocking — an incidental
+  improvement. (ii) The same queued text now waits behind `react()`'s new retry budget when a reaction
+  fails (F-2's fix), adding up to `2 × 0.5 s` before the user's ack. Both acceptable.
+- **Where the fix stops**: `_handle_attachments` ends by invoking the callback with only its **own**
+  attachments (`:387-390`) and never consults `_inflight` — see F-13. And `_deliver_after` waits with
+  no timeout and no fallback delivery — see F-14.
+
+### B. Test validity — the delta's tests
+
+| Test | Evidence | Valid? | Why |
+|---|---|---|---|
+| `int_AC_1_text_waits_for_an_in_flight_receive` | coordinator's guard-removal probe; read the body | ✅ | the mid-download assertion `cb.call_count == 0` is reached before any `await` on the delivery path, and unguarded code delivers **inline**, so removal flips it deterministically. It pins the ordering primitive, not the hold itself — the assertion message says "before the image was held" where the assertion actually checks delivery order; fair, since `job.done()` implies the hold, but the message overstates what is asserted |
+| `test_text_is_not_delayed_when_nothing_is_in_flight` | read the body | ✅ | asserts `cb.assert_called_once_with(...)` with **no intervening await**, which is exactly what proves the direct path stayed inline — the right shape for AC-4's byte-identical guarantee |
+| `test_a_failed_receive_still_delivers_the_text` | read the body | ⚠ timing-dependent | see F-17: if the failing job settles before the text event, `_inflight_for` returns `[]`, the direct path is taken, and `_deliver_after`'s `except` is never executed — the test passes either way |
+| `test_reaction_retries_then_succeeds` / `..._gives_up_after_the_retry_budget` | read the bodies | ✅ | asserts `create.call_count == 2` on the retry, and `False` plus `message.reply.call_count == 0` on exhaustion; `reply()` really does go through that attribute, so the no-escalation assertion bites |
+| `int_AC_14_an_oversized_rejection_records_its_size` | read the body | ⚠ valid but fictional | asserts `size=11534336`, a value the production `download_resource` can never emit — the read is bounded at `max_bytes + 1`, so `too_large` always yields `10485761`. It proves the third element is plumbed through; it does not exercise the value production makes. See F-15 |
+| `test_a_client_that_has_not_opted_in_ignores_images` / `..._still_delivers_the_text_of_a_captioned_post` / `test_the_default_is_opt_out` | read the bodies | ✅ | four independent negatives (no schedule, no download, no react, no callback), the post-text positive, and the default pinned against the constructor. This is the strongest of the four fix suites |
+
+**Not covered anywhere, at any layer**: the end-to-end ordering property itself. The E2E driver
+`Stack.deliver` (`test_e2e_image_input.py:136-153`) still awaits the offloaded coroutine before
+returning, so it cannot express "text arrives mid-download" — unchanged by this batch. The F-1 fix is
+pinned only at the unit layer.
+
+### C. Red flags (round 2)
+
+Round 1 IDs keep their status; new IDs continue the sequence.
+
+| ID | Issue | Severity | Evidence (file:line) | Status |
+|---|---|---|---|---|
+| F-1 … F-5 | round 1 Importants | — | verified above | **fixed** |
+| F-6 … F-12 | round 1 Suggestions | Suggestion | round 1 § C | open (user's decision; none made worse) |
+| F-13 | F-1's sibling path is still racy: `_handle_attachments` invokes the callback without waiting on this sender's other in-flight receives, so image-then-**captioned-post** can still attach the wrong set | Important | `core/src/core/feishu_client.py:387-390` vs the guard at `:257-266` | open |
+| F-14 | The new wait has no timeout and no fallback delivery, and waits jobs **sequentially** — a stalled receive silently withholds that sender's messages | Important | `core/src/core/feishu_client.py:295-306`; lark default HTTP timeout 30 s (`lark_oapi/core/model/config.py:13-14`) × `UPDATE_MAX_RETRIES=2` | open |
+| F-15 | `too_large` always logs `size=10485761` (`max_bytes + 1`) — a floor rendered as an exact size, and the two new tests pin `11534336`, which production cannot produce | Suggestion | `core/src/core/feishu_client.py:618-622`; `core/tests/test_feishu_client.py:1067, 850, 921` | open |
+| F-16 | `download_resource`'s return shape changed twice in two rounds (`bytes\|None` → 2-tuple → 3-tuple); the next field makes it a 4-tuple | Suggestion | `core/src/core/feishu_client.py:573-575`; plan T2 *Notes*; design § *Backend API* | open |
+| F-17 | `test_a_failed_receive_still_delivers_the_text` does not deterministically exercise `_deliver_after`'s `except` branch | Suggestion | `core/tests/test_feishu_client.py:1013-1032` | open |
+| F-18 | The tester's E2E evidence now predates the code: `report_at_head=false`, `code_moved=5`, and `role-dev` edited `test_e2e_image_input.py` itself in this batch | Important | `sdlc-review-facts` (`report_sha=9e0ce9f`, `head_sha=ad8227f`); `git diff 3211aa8..HEAD -- bots/coder/tests/test_e2e_image_input.py` | open |
+
+## Verdict (round 2)
+
+**NEEDS CHANGES.** The fix batch is good work and I want to be clear about that: five for five, the
+mechanisms match what the design now says, the artifacts stopped claiming a verification that never
+happened, and the F-1 guard survived every attack I could mount on it — including the one the
+coordinator flagged, which turns out to be impossible rather than merely unlikely. It is NEEDS CHANGES
+on three Important rows, none of which existed before this batch or was visible in round 1: F-13 is the
+half of F-1's problem the fix did not reach, F-14 is a new failure mode the fix introduced (silence
+where there was previously a visible wrong answer, and silence is the worse of the two for a chat
+bot), and F-18 is the E2E evidence falling behind the code. Two step-1 gates also failed — the plan's
+design anchor is stale (`role-planner`) and the report staleness above — and I continued rather than
+refusing, for the reason stated in § 1.
+
+## Required changes (round 2)
+
+| ID | Finding | Severity | Chance (trigger) | Impact (blast · recovery) | Evidence | Fix | Route | Status |
+|---|---|---|---|---|---|---|---|---|
+| F-13 | Image then **captioned post**: the post's `_handle_attachments` calls the callback with only its own attachments and never waits on the sender's other in-flight receives. Both downloads run concurrently in the default executor, so a smaller second image can settle first — the post then attaches only its own image and the earlier paste rides the *next*, unrelated message | Important | low-medium — needs a paste followed by a captioned post inside the download window, **and** the second download finishing first. It is a flow the plan's T5 *Notes* explicitly promise ("pasting an image and then sending a captioned post attaches both") | medium · same consequence as F-1 — an image silently absent from the turn it was meant for, then attached to an unrelated one for up to the 10-min TTL · re-paste | `feishu_client.py:387-390` (no `_inflight` consult) against the guard at `:257-266`; plan T5 *Notes* | before invoking the callback, await this sender's *other* in-flight receives — the same `_inflight_for` / `_deliver_after` primitive, applied to the attachment path and excluding the job's own future | dev | open |
+| F-14 | `_deliver_after` awaits each in-flight job with no timeout and no fallback, **sequentially**. lark's HTTP timeout defaults to 30 s and `download_resource` retries 3×, so one stuck receive can hold a sender's text for ~90 s — and six pasted images are six jobs awaited in series. During that window the user gets **no ack and no reply**; their retries queue behind the same job. Before this fix the text arrived immediately, merely without the image | Important | low-medium — needs a Feishu resource call to time out or exhaust retries during a paste, which is exactly when users re-send | medium-high · one sender's messages appear ignored for minutes with nothing in chat to explain it; the operator sees only a WARNING · self-heals when the job settles | `feishu_client.py:295-306`; `lark_oapi/core/model/config.py:13-14` (30 s default); `UPDATE_MAX_RETRIES = 2`, `UPDATE_RETRY_DELAY = 0.5` (`feishu_client.py:45-46`) | bound the wait — `asyncio.wait_for(asyncio.gather(*[wrap_future(j) for j in jobs]), timeout=<a few seconds>)` — and **deliver the text anyway** on timeout. Degrading to F-1's visible wrong answer is strictly better than silence; log the timeout so it is diagnosable | dev | open |
+| F-18 | The tester's report is stamped at `9e0ce9f`; production code moved twice since (`f6824df`), and `role-dev` edited the tester's `test_e2e_image_input.py` in this batch. No E2E run against this tree has been signed off, so AC-1…AC-14's acceptance evidence describes the pre-fix code | Important | certain — it is already the case | medium · the acceptance layer still passes mechanically, but no signed evidence covers the fixed receive path, which is precisely where the fixes landed · resolved by one re-run and a refreshed report | `sdlc-review-facts`: `report_sha=9e0ce9f`, `head_sha=ad8227f`, `code_moved=5`, `report_at_head=false` | re-run the E2E layer at `ad8227f` and refresh the report's stamp; while there, review the dev's edits to the E2E file (3-tuple mocks, `accept_attachments=True`) as the file's owner, and consider a spec that expresses text-arriving-mid-download, which `Stack.deliver` cannot currently express | tester | open |
+
+Suggestions F-15, F-16, F-17 sit in § C with their evidence and do not gate the verdict. Round 1's
+F-6 … F-12 remain the user's, unchanged and not re-raised.
+
+## What to fix next (round 2)
+
+1. **F-13 (dev)** — `core/src/core/feishu_client.py:387-390`: apply the `_inflight` wait to the
+   attachment path's callback too, excluding the job's own future. Touches AC-1, AC-2.
+2. **F-14 (dev)** — `core/src/core/feishu_client.py:295-306`: `gather` the waits, bound them with
+   `asyncio.wait_for`, deliver the text on timeout, log it. Touches AC-1, AC-4 and the spec's
+   "must not block the bot from handling other messages" NFR.
+3. **F-18 (tester)** — re-run the E2E layer at `ad8227f` and re-stamp
+   `docs/sdlc/test-reports/messaging/image-input.md`; add an E2E that delivers text **before**
+   awaiting the offload, which the current `Stack.deliver` cannot express.
+4. **Chain freshness (`role-planner`, not dev or tester)** — re-stamp
+   `docs/sdlc/plans/messaging/image-input.md:5`'s `Design version targeted:` against the updated
+   design so `sdlc-freshness` stops reporting `DRIFTED plan→design`.
+5. **F-15, F-16, F-17 (dev)** — Suggestions; take or decline per row.
+
+## History
+
+- Round 1 — F-1 … F-5 **Important** (all now `fixed`), F-6 … F-12 **Suggestion** (`open`, user's
+  decision). Verdict: NEEDS CHANGES.
+- Round 2 — F-13, F-14, F-18 **Important** (`open`); F-15, F-16, F-17 **Suggestion** (`open`).
+  Verdict: NEEDS CHANGES.
