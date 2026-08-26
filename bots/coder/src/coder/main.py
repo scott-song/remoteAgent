@@ -34,7 +34,12 @@ class ClaudeWorkspaceBot(CommandsMixin):
         self.registry = ProjectRegistry(projects_dir=coder_settings.projects_dir)
         self.sessions = SessionManager()
         self.feishu = FeishuClient(
-            app_id=core_settings.feishu_app_id, app_secret=core_settings.feishu_app_secret
+            app_id=core_settings.feishu_app_id,
+            app_secret=core_settings.feishu_app_secret,
+            # Opt in to the attachment path: this bot drains holds on every
+            # message and purges them on session close. A bot that does neither
+            # must leave this off or it accumulates images forever.
+            accept_attachments=True,
         )
         self.feishu.on_message(self._on_message)
         self._user_projects: dict[str, str] = {}

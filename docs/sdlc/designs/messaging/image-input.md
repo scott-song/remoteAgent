@@ -120,11 +120,13 @@ Per call — a signature snippet in the `lark-oapi` builder idiom used throughou
 # GET /open-apis/im/v1/messages/:message_id/resources/:file_key?type=image
 def download_resource(
     self, message_id: str, file_key: str, *, max_bytes: int = IMAGE_MAX_BYTES
-) -> tuple[bytes | None, str | None]:
-    """Return (data, None) on success, else (None, reason).
+) -> tuple[bytes | None, str | None, int]:
+    """Return (data, None, size) on success, else (None, reason, size).
 
     reason is "too_large" (AC-7) or "failed" (AC-8). The two cases carry
     different user-facing replies, so a single None would conflate them.
+    size is the byte count observed — AC-14 needs it on the rejection path
+    too, since for "too_large" the size IS the reason.
     Reads at most max_bytes + 1 so an oversized image is never fully
     buffered.
     """
@@ -196,6 +198,15 @@ helper and asserts positionally (`cb.assert_called_once_with("chat_001", …)`),
 The HR bot has no use for images, so it accepts the parameter and ignores it (`_attachments`), exactly
 as it already ignores `_sender_name`. This is a deliberate choice of an explicit, mypy-visible break
 over an arity-sniffing shim — see *Trade-offs*.
+
+**The second consumer is more than a signature, and this section originally missed that** (review F-5).
+Widening `_on_event` made **every** `FeishuClient` download and hold images, and `HRBot` has no
+`SessionManager` — so it would never `take()` and never `purge()`, accumulating up to
+`MAX_ATTACHMENTS × IMAGE_MAX_BYTES` per pasting `(sender, chat)` pair for the process lifetime, against
+the spec's bounded-growth NFR. The attachment path is therefore **opt-in**:
+`FeishuClient(..., accept_attachments=False)` by default, and only the coder bot — which drains on
+every message and purges on session close — turns it on. A consumer that opts out still receives the
+**text** of a captioned `post`; only the image is ignored.
 
 **Conventions referenced** — `core/src/core/feishu_client.py:236-262` (builder + retry + fallback
 shape for every outbound call), `:151-156` (`_seen_ids` dedup), `:143-183` (`_on_event` structure);
@@ -321,6 +332,15 @@ receive-side work onto that loop with `run_coroutine_threadsafe`, the same mecha
 `CoderBot._schedule` uses (`main.py:43-44`). `_on_event` therefore stays non-blocking: it dedups,
 parses, dispatches, and returns.
 
+**Ordering against the offload (review F-1).** Offloading creates a race the first version missed: a
+text message arriving while a download is still running drains an empty hold, so the image is omitted
+from the turn it was meant for and then attaches to the sender's *next*, unrelated message. Mechanism
+chosen: `FeishuClient` tracks in-flight receives per `(sender, chat)`, and a text message from a sender
+with a pending receive is delivered **behind** it on the bot loop rather than inline. A failed receive
+never withholds the text. When nothing is in flight the direct path is untouched, which is what keeps
+AC-4 byte-identical. Rejected alternative: a fixed grace-sleep before every drain — simpler, but it
+taxes every text message for a case that is usually absent.
+
 **Caching / pagination / async** — **no cache** (the default; an attachment is read at most once, so a
 cache would add invalidation risk for no hit rate). Pagination `n/a — no list surface`. Async: the
 receive path is offloaded as above; **no queue or broker is introduced** (that would be a system-level
@@ -420,9 +440,12 @@ claims. Stating that plainly rather than naming a tool the project does not have
 
 - *Is `IMAGE_MAX_BYTES = 10 MB` Feishu's actual image ceiling?* Carried from the spec unverified. A cap
   below the platform's rejects images Feishu would have delivered. Owner: @user. Target: 2026-09-02.
-- *Is `ACK_EMOJI = "EYES"` a valid Feishu `emoji_type`?* The value must come from Feishu's fixed emoji
-  set or `message_reaction.create` fails and AC-3's acknowledgement silently never appears. Verify
-  against the live API before AC-3 is judged. Owner: @dev. Target: at build.
+- *Is `ACK_EMOJI = "EYES"` a valid Feishu `emoji_type`?* **NOT VERIFIED — deferred, explicitly.** The
+  plan's T2 mandated verifying this against the live API and recording the confirmed value; that step
+  was not performed, because this environment has no live Feishu access (review F-4). The value must
+  come from Feishu's fixed emoji set or `message_reaction.create` fails and AC-3's acknowledgement
+  silently never appears — with only a WARNING in the log. **This is the single most likely live
+  failure.** Owner: @user, at the first live Feishu pass. Target: first live run.
 - *Does the agent reliably read a path-referenced image?* The chosen approach depends on the model
   electing to call `Read`. AC-1 is the check, and this is the one AC whose failure would be a silent
   wrong answer rather than an error. If it proves unreliable, the fallback is the base64 content-block

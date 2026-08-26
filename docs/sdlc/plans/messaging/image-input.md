@@ -42,7 +42,10 @@ land together in the same PR — see the risk register.
 - **Design**: `§ Backend API` (both signature snippets, the error table)
 - **Covers**: AC-3 (partial — the bare-image branch is T3), AC-7 (full), AC-8 (partial — the reply is T3)
 - **Risk**: medium — `ACK_EMOJI = "EYES"` is unverified against Feishu's `emoji_type` set; an invalid value makes AC-3's acknowledgement silently never appear.
-- **Notes**: `red: AttributeError: 'FeishuClient' object has no attribute 'react'` (10 new tests failing before implementation). **Design divergence, corrected in the design in this step**: `download_resource` returns `tuple[bytes | None, str | None]`, not `bytes | None` — AC-7 and AC-8 carry different replies, so oversize and failure must stay distinguishable at the call boundary. `download_resource` reads at most `max_bytes + 1` so an oversized image is never fully buffered (AC-7), and returns `None` as the single failure signal (AC-8). Reuse the existing `UPDATE_MAX_RETRIES` / `UPDATE_RETRY_DELAY` loop — do not invent a second retry policy. `react` returns `bool` and **never** escalates a failure to a chat reply, because AC-3 forbids a message. Verify the emoji value against the live API as part of this task and record the confirmed value.
+- **Notes**: `red: AttributeError: 'FeishuClient' object has no attribute 'react'` (10 new tests failing before implementation). **Design divergence, corrected in the design in this step**: `download_resource` returns `tuple[bytes | None, str | None]`, not `bytes | None` — AC-7 and AC-8 carry different replies, so oversize and failure must stay distinguishable at the call boundary. `download_resource` reads at most `max_bytes + 1` so an oversized image is never fully buffered (AC-7), and returns `None` as the single failure signal (AC-8). Reuse the existing `UPDATE_MAX_RETRIES` / `UPDATE_RETRY_DELAY` loop — do not invent a second retry policy. `react` returns `bool` and **never** escalates a failure to a chat reply, because AC-3 forbids a message. **DEFERRED, NOT DONE** (review F-4): verifying the emoji value against the live API was mandated here
+  and was **not** performed — this environment has no live Feishu access. The confirmed value is still
+  unknown; recorded in the design's *Open questions* with the user as owner. This task is `[x]` for the
+  code it landed, **not** for that verification.
 
 ### T3 — Widen the event path to carry attachments
 
@@ -104,6 +107,9 @@ land together in the same PR — see the risk register.
   wrong answer, the only AC whose failure produces no error). Mitigation: the tester exercises AC-1
   against a real image at stage 5; if unreliable, the fallback is the base64 content-block path named
   in the design's *Trade-offs*, which would be a new task, not an edit to T5. Owner: tester → dev.
+- **`ACK_EMOJI` was never verified and T2 originally claimed it would be** — the mitigation named in
+  this register did not happen; it is now an explicit deferral in the design's *Open questions*, owner
+  the user, to be settled by the first live run (review F-4).
 - **Two constants are unverified** — `ACK_EMOJI` (breaks AC-3 if invalid) and `IMAGE_MAX_BYTES`
   (may sit below Feishu's real ceiling, rejecting images Feishu would have delivered). Likelihood
   medium, impact low-to-medium and both immediately visible. Mitigation: verify the emoji in T2;
@@ -129,3 +135,4 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 ## Revisions  <!-- History -->
 
 - `2026-08-26 — design update: download_resource returns a reason alongside the bytes so AC-7 and AC-8 stay distinguishable; no task or AC impact.`
+- `2026-08-26 — review round 1: F-1..F-5 fixed forward on main; F-4 recorded as an explicit deferral rather than a completed verification.`

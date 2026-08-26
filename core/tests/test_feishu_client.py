@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -16,7 +17,7 @@ from core.attachments import ACK_EMOJI
 # ---------------------------------------------------------------------------
 
 
-def _make_client(mock_lark=None):
+def _make_client(mock_lark=None, accept_attachments=True):
     """Create a FeishuClient with lark SDK mocked at the module level."""
     with patch("core.feishu_client.lark") as lark_mock:
         if mock_lark:
@@ -31,7 +32,9 @@ def _make_client(mock_lark=None):
 
         from core.feishu_client import FeishuClient
 
-        client = FeishuClient("test_app_id", "test_app_secret")
+        client = FeishuClient(
+            "test_app_id", "test_app_secret", accept_attachments=accept_attachments
+        )
     return client
 
 
@@ -559,20 +562,22 @@ class TestDownloadResource:
         oversized = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
         client.lark_client.im.v1.message_resource.get.return_value = _resource_response(oversized)
 
-        data, reason = client.download_resource("msg_1", "img_1", max_bytes=16)
+        data, reason, size = client.download_resource("msg_1", "img_1", max_bytes=16)
 
         assert data is None
         assert reason == "too_large"
+        assert size == 17, "AC-14 needs the observed size on the rejection path too"
 
     def test_a_payload_at_the_cap_is_accepted(self):
         client = _make_client()
         exact = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8  # 16 bytes
         client.lark_client.im.v1.message_resource.get.return_value = _resource_response(exact)
 
-        data, reason = client.download_resource("msg_1", "img_1", max_bytes=16)
+        data, reason, size = client.download_resource("msg_1", "img_1", max_bytes=16)
 
         assert data == exact
         assert reason is None
+        assert size == len(exact)
 
     def test_oversized_payload_is_not_fully_buffered(self):
         """The read must stop at max_bytes + 1 so a huge image never lands in
@@ -599,10 +604,11 @@ class TestDownloadResource:
 
         with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
-            data, reason = client.download_resource("msg_1", "img_1")
+            data, reason, size = client.download_resource("msg_1", "img_1")
 
         assert data is None
         assert reason == "failed"
+        assert size == 0
 
     def test_download_retries_then_succeeds(self):
         client = _make_client()
@@ -613,7 +619,7 @@ class TestDownloadResource:
 
         with patch("core.feishu_client.time") as mock_time:
             mock_time.sleep = MagicMock()
-            data, reason = client.download_resource("msg_1", "img_1")
+            data, reason, _ = client.download_resource("msg_1", "img_1")
 
         assert data == b"\x89PNG\r\n\x1a\n"
         assert reason is None
@@ -623,7 +629,7 @@ class TestDownloadResource:
         client = _make_client()
         client.lark_client.im.v1.message_resource.get.return_value = _resource_response(None)
 
-        data, reason = client.download_resource("msg_1", "img_1")
+        data, reason, _ = client.download_resource("msg_1", "img_1")
 
         assert data is None
         assert reason == "failed"
@@ -772,7 +778,7 @@ class TestEventDispatch:
 class TestHandleAttachments:
     """The offloaded coroutine — where downloads, holds and acks actually happen."""
 
-    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n", None)):
+    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n", None, 8)):
         from core.attachments import AttachmentStore
 
         client = _make_client()
@@ -827,7 +833,7 @@ class TestHandleAttachments:
         assert client.download_resource.call_count == MAX_ATTACHMENTS
 
     async def test_int_AC_7_an_oversized_image_is_reported_and_nothing_held(self, tmp_path):
-        client = self._client(tmp_path, download=(None, "too_large"))
+        client = self._client(tmp_path, download=(None, "too_large", 11534336))
         cb = MagicMock()
         client.on_message(cb)
         client.reply = MagicMock()
@@ -840,7 +846,7 @@ class TestHandleAttachments:
         )
 
     async def test_int_AC_8_a_failed_download_is_reported_and_nothing_held(self, tmp_path):
-        client = self._client(tmp_path, download=(None, "failed"))
+        client = self._client(tmp_path, download=(None, "failed", 0))
         cb = MagicMock()
         client.on_message(cb)
         client.reply = MagicMock()
@@ -853,7 +859,7 @@ class TestHandleAttachments:
         )
 
     async def test_unstorable_bytes_are_reported_not_silently_dropped(self, tmp_path):
-        client = self._client(tmp_path, download=(b"%PDF-1.7 not an image", None))
+        client = self._client(tmp_path, download=(b"%PDF-1.7 not an image", None, 21))
         cb = MagicMock()
         client.on_message(cb)
         client.reply = MagicMock()
@@ -867,7 +873,7 @@ class TestHandleAttachments:
         """A partial failure must not swallow the user's question."""
         client = self._client(tmp_path)
         client.download_resource = MagicMock(
-            side_effect=[(b"\x89PNG\r\n\x1a\n", None), (None, "failed")]
+            side_effect=[(b"\x89PNG\r\n\x1a\n", None, 8), (None, "failed", 0)]
         )
         cb = MagicMock()
         client.on_message(cb)
@@ -886,7 +892,7 @@ class TestHandleAttachments:
 
 
 class TestReceiptAudit:
-    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24, None)):
+    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24, None, 32)):
         from core.attachments import AttachmentStore
 
         client = _make_client()
@@ -911,10 +917,10 @@ class TestReceiptAudit:
         assert "accepted" in line.message
         assert "user_001"[:8] in line.message
         assert "chat_001"[:8] in line.message
-        assert "32" in line.message  # byte size
+        assert "size=32" in line.message  # F-3: exact, not a bare substring
 
     async def test_int_AC_14_a_rejected_receipt_records_why(self, tmp_path, caplog):
-        client = self._client(tmp_path, download=(None, "too_large"))
+        client = self._client(tmp_path, download=(None, "too_large", 11534336))
         client.on_message(MagicMock())
 
         with caplog.at_level(logging.INFO):
@@ -947,3 +953,166 @@ class TestReceiptAudit:
             await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
 
         assert "ack_ms=" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 fixes (F-1, F-2, F-3, F-5)
+# ---------------------------------------------------------------------------
+
+
+class TestPasteThenTypeRace:
+    """F-1 — a text message must not drain a hold whose download is still running."""
+
+    async def test_int_AC_1_text_waits_for_an_in_flight_receive(self):
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        loop = asyncio.get_running_loop()
+        client._loop = loop
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_receive(*_a, **_kw):
+            started.set()
+            await release.wait()
+
+        client._handle_attachments = slow_receive
+
+        client._on_event(_image_event())
+        await started.wait()
+
+        # The text arrives mid-download: it must NOT reach the callback yet.
+        client._on_event(_make_event(text="why is this broken?", message_id="m_text"))
+        await asyncio.sleep(0)
+        assert cb.call_count == 0, "the text was delivered before the image was held"
+
+        release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if cb.call_count:
+                break
+        assert cb.call_count == 1
+        assert cb.call_args[0][3] == "why is this broken?"
+
+    async def test_text_is_not_delayed_when_nothing_is_in_flight(self):
+        """AC-4's guarantee: with no pending receive the direct path is unchanged."""
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+
+        client._on_event(_make_event(text="run the tests"))
+
+        cb.assert_called_once_with(
+            "chat_001", "user_001", "user_001", "run the tests", "msg_001", []
+        )
+
+    async def test_a_failed_receive_still_delivers_the_text(self):
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+
+        async def boom(*_a, **_kw):
+            raise RuntimeError("download exploded")
+
+        client._handle_attachments = boom
+        client._on_event(_image_event())
+        await asyncio.sleep(0)
+        client._on_event(_make_event(text="still mine", message_id="m_text"))
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if cb.call_count:
+                break
+
+        assert cb.call_count == 1
+
+
+class TestReactRetry:
+    """F-2 — the reaction retries like every other outbound call."""
+
+    def test_reaction_retries_then_succeeds(self):
+        client = _make_client()
+        fail, ok = MagicMock(), MagicMock()
+        fail.success.return_value = False
+        fail.code, fail.msg = 230001, "transient"
+        ok.success.return_value = True
+        client.lark_client.im.v1.message_reaction.create.side_effect = [fail, ok]
+
+        with patch("core.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            assert client.react("msg_1") is True
+
+        assert client.lark_client.im.v1.message_reaction.create.call_count == 2
+
+    def test_reaction_gives_up_after_the_retry_budget(self):
+        client = _make_client()
+        fail = MagicMock()
+        fail.success.return_value = False
+        fail.code, fail.msg = 230001, "still failing"
+        client.lark_client.im.v1.message_reaction.create.return_value = fail
+
+        with patch("core.feishu_client.time") as mock_time:
+            mock_time.sleep = MagicMock()
+            assert client.react("msg_1") is False
+
+        assert client.lark_client.im.v1.message.reply.call_count == 0
+
+
+class TestRejectionSize:
+    """F-3 — AC-14 needs the size on the rejection path, where size is the reason."""
+
+    async def test_int_AC_14_an_oversized_rejection_records_its_size(self, tmp_path, caplog):
+        from core.attachments import AttachmentStore
+
+        client = _make_client()
+        client.attachments = AttachmentStore(root=tmp_path)
+        client.reply = MagicMock()
+        client.download_resource = MagicMock(return_value=(None, "too_large", 11534336))
+        client.on_message(MagicMock())
+
+        with caplog.at_level(logging.INFO):
+            await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        assert "rejected:too_large" in caplog.text
+        assert "size=11534336" in caplog.text
+
+
+class TestAttachmentOptIn:
+    """F-5 — a bot that never drains holds must never accumulate them."""
+
+    def test_a_client_that_has_not_opted_in_ignores_images(self):
+        client = _make_client(accept_attachments=False)
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = MagicMock()
+        client.download_resource = MagicMock()
+        client.react = MagicMock()
+
+        with patch("core.feishu_client.asyncio.run_coroutine_threadsafe") as scheduled:
+            client._on_event(_image_event())
+
+        scheduled.assert_not_called()
+        client.download_resource.assert_not_called()
+        client.react.assert_not_called()
+        cb.assert_not_called()
+
+    def test_opt_out_still_delivers_the_text_of_a_captioned_post(self):
+        """Dropping the image must not drop the user's words with it."""
+        client = _make_client(accept_attachments=False)
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = MagicMock()
+
+        client._on_event(_post_event(text="just the words please"))
+
+        cb.assert_called_once()
+        assert cb.call_args[0][3] == "just the words please"
+        assert cb.call_args[0][5] == []
+
+    def test_the_default_is_opt_out(self):
+        from core.feishu_client import FeishuClient
+
+        with patch("core.feishu_client.lark"):
+            assert FeishuClient("a", "b").accept_attachments is False
