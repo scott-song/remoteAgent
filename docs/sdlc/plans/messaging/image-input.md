@@ -26,13 +26,13 @@ land together in the same PR — see the risk register.
 
 ### T1 — Add the attachment store with its constants and rules
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: none
-- **Files**: `core/src/core/attachments.py` (new)
+- **Files**: `core/src/core/attachments.py` (new), `core/tests/test_attachments.py` (new)
 - **Design**: `§ Architecture → New module` (the `AttachmentStore` contract) · `§ Security → Data classification`
 - **Covers**: AC-5 (partial — warning surfaced by T5), AC-6 (partial — per-message cap in T3, warning in T5), AC-9 (partial — completed by T5), AC-10 (partial — completed by T5), AC-11 (full), AC-13 (partial — wiring in T6)
 - **Risk**: low
-- **Notes**: `put` sniffs magic bytes and **rejects** an unrecognised signature rather than storing under a fallback name; the stored filename is a generated `uuid4`, never Feishu's `file_name` (`§ Security → Tampering`). Write files `0600`, directories `0700`. Storage root `~/.claude-workspace/attachments/<sha256(sender:chat)[:16]>/` — outside every `project_dir`, which is the whole of AC-10. Expose a module-level default store instance so `session_manager` can import it without a constructor-injection refactor. `take` returns `(attachments, warnings)` so no caller re-derives expiry or cap rules. Owns `IMAGE_MAX_BYTES`, `MAX_ATTACHMENTS`, `HOLD_TTL_SECONDS`, `ACK_EMOJI`, `ACCEPTED_MSG_TYPES`.
+- **Notes**: `red: ModuleNotFoundError: No module named 'core.attachments'` (29 tests, collection error before implementation). `put` sniffs magic bytes and **rejects** an unrecognised signature rather than storing under a fallback name; the stored filename is a generated `uuid4`, never Feishu's `file_name` (`§ Security → Tampering`). Write files `0600`, directories `0700`. Storage root `~/.claude-workspace/attachments/<sha256(sender:chat)[:16]>/` — outside every `project_dir`, which is the whole of AC-10. Expose a module-level default store instance so `session_manager` can import it without a constructor-injection refactor. `take` returns `(attachments, warnings)` so no caller re-derives expiry or cap rules. Owns `IMAGE_MAX_BYTES`, `MAX_ATTACHMENTS`, `HOLD_TTL_SECONDS`, `ACK_EMOJI`, `ACCEPTED_MSG_TYPES`.
 
 ### T2 — Add the two outbound Feishu calls: resource download and reaction
 
@@ -118,5 +118,7 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 *Open questions* as post-ship, not silently absorbed here.
 
 ## Build record  <!-- role-dev writes this during the build — empty at plan time -->
+
+- `W1 self-review @ 76deebd — 2 files · 0 critical, 0 important, 1 suggestion (chmod applied after write_bytes; brief default-perm window)`
 
 ## Revisions  <!-- History -->
