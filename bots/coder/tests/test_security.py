@@ -177,3 +177,47 @@ async def test_hook_no_restriction_skips_path_check():
     hook = make_bash_security_hook(ALLOWED, None)
     result = await hook({"tool_name": "Bash", "tool_input": {"command": "cat /etc/passwd"}})
     assert result == {}
+
+
+# ── allowlist opt-out (allowed_commands=None) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hook_none_allowlist_permits_unlisted_command():
+    """With the allowlist off, a command absent from it is no longer blocked."""
+    hook = make_bash_security_hook(None, None)
+    result = await hook({"tool_name": "Bash", "tool_input": {"command": "make test"}})
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_hook_none_allowlist_permits_unparseable_command():
+    """Parse failures only matter to the allowlist check, which is off."""
+    hook = make_bash_security_hook(None, None)
+    result = await hook({"tool_name": "Bash", "tool_input": {"command": "'unterminated"}})
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_hook_none_allowlist_still_enforces_path_restriction():
+    """bash_allowlist and restricted are independent gates."""
+    hook = make_bash_security_hook(None, PROJECT_DIR)
+    result = await hook({"tool_name": "Bash", "tool_input": {"command": "make -C /etc/evil"}})
+    assert result.get("decision") == "block"
+
+
+@pytest.mark.asyncio
+async def test_hook_none_allowlist_allows_unlisted_command_inside_project():
+    hook = make_bash_security_hook(None, PROJECT_DIR)
+    result = await hook(
+        {"tool_name": "Bash", "tool_input": {"command": f"make -C {PROJECT_DIR} test"}}
+    )
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_hook_empty_allowlist_blocks_everything():
+    """An empty set is not the same as None — it blocks, it does not disable."""
+    hook = make_bash_security_hook(set(), None)
+    result = await hook({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+    assert result.get("decision") == "block"

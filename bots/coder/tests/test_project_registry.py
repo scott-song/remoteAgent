@@ -36,6 +36,7 @@ class TestProjectConfig:
         cfg = ProjectConfig(name="test", project_dir=Path("/tmp/proj"))
         assert cfg.model == DEFAULT_MODEL
         assert cfg.restricted is True
+        assert cfg.bash_allowlist is False
         assert cfg.permission_mode == "acceptEdits"
         assert cfg.display_name == ""
         assert cfg.description == ""
@@ -80,6 +81,26 @@ class TestProjectRegistryLoading:
         assert project is not None
         assert project.name == "proj1"
         assert project.project_dir == Path("/tmp/proj1")
+
+    def test_bash_allowlist_defaults_false_when_absent(self, tmp_path):
+        """A YAML with no bash_allowlist key leaves the allowlist off globally."""
+        _write_yaml(tmp_path / "proj1.yaml", _minimal_raw())
+        reg = ProjectRegistry(tmp_path)
+        assert reg.get("proj1").bash_allowlist is False
+
+    def test_bash_allowlist_true_opts_project_back_in(self, tmp_path):
+        """bash_allowlist: true re-enables the allowlist for one project."""
+        _write_yaml(tmp_path / "proj1.yaml", _minimal_raw(bash_allowlist=True))
+        reg = ProjectRegistry(tmp_path)
+        assert reg.get("proj1").bash_allowlist is True
+
+    def test_bash_allowlist_survives_save_roundtrip(self, tmp_path):
+        """_save_yaml persists bash_allowlist so a reload does not silently flip it."""
+        _write_yaml(tmp_path / "proj1.yaml", _minimal_raw(bash_allowlist=True))
+        reg = ProjectRegistry(tmp_path)
+        reg.bind_chat("proj1", "chat_xyz")  # triggers _save_yaml
+        reg.reload()
+        assert reg.get("proj1").bash_allowlist is True
 
     def test_load_invalid_yaml_does_not_crash(self, tmp_path):
         (tmp_path / "bad.yaml").write_text("{{{{not yaml at all!!!!")

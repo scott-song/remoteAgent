@@ -60,12 +60,25 @@ def create_claude_client(
     """
     project_dir = project.project_dir.resolve()
 
-    # Build allowed commands set
-    allowed_cmds = BASE_ALLOWED_COMMANDS | set(project.allowed_commands)
+    # Build allowed commands set — None disables the allowlist check, leaving the
+    # project's own .claude/settings.json permissions as the sole gate.
+    allowed_cmds = (
+        BASE_ALLOWED_COMMANDS | set(project.allowed_commands) if project.bash_allowlist else None
+    )
 
-    # Build security hook
+    # Build security hook — skipped entirely when neither gate is active, so the
+    # bot adds no PreToolUse veto on top of the project's settings.json.
     restricted_dir = str(project_dir) if project.restricted else None
-    security_hook = make_bash_security_hook(allowed_cmds, restricted_dir)
+    bash_hooks = None
+    if allowed_cmds is not None or restricted_dir:
+        bash_hooks = {
+            "PreToolUse": [
+                HookMatcher(
+                    matcher="Bash",
+                    hooks=[make_bash_security_hook(allowed_cmds, restricted_dir)],
+                ),
+            ],
+        }
 
     # Load MCP servers: project-configured + project-level from ~/.claude.json
     project_mcp = _load_project_mcp_servers(project_dir)
@@ -77,14 +90,7 @@ def create_claude_client(
         model=project.model,
         allowed_tools=[*BUILTIN_TOOLS, *mcp_tool_wildcards],
         mcp_servers=all_mcp if all_mcp else None,
-        hooks={
-            "PreToolUse": [
-                HookMatcher(
-                    matcher="Bash",
-                    hooks=[security_hook],
-                ),
-            ],
-        },
+        hooks=bash_hooks,
         max_turns=1000,
         cwd=str(project_dir),
         setting_sources=project.setting_sources,
@@ -98,25 +104,10 @@ def create_claude_client(
     if resume:
         options_kwargs["resume"] = resume
 
-    # Write permission settings file
+    # Ensure cwd exists — the CLI subprocess fails on a missing working directory,
+    # and a project without a github_url is never cloned by git_sync.
     project_dir.mkdir(parents=True, exist_ok=True)
-    settings_file = project_dir / ".claude_settings.json"
-    settings_data = {
-        "permissions": {
-            "defaultMode": project.permission_mode or "acceptEdits",
-            "allow": [
-                "Read(./**)",
-                "Write(./**)",
-                "Edit(./**)",
-                "Glob(./**)",
-                "Grep(./**)",
-                "Bash(*)",
-                *mcp_tool_wildcards,
-            ],
-        },
-    }
-    with open(settings_file, "w") as f:
-        json.dump(settings_data, f, indent=2)
-    options_kwargs["settings"] = str(settings_file)
 
+    # No generated settings file: permissions come from the project's own
+    # .claude/settings.json (loaded via setting_sources). See ADR-0006.
     return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
