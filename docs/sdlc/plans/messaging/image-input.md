@@ -119,6 +119,8 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 
 ## Build record  <!-- role-dev writes this during the build — empty at plan time -->
 
+- `run gates: suite ✅ 389/389 (full suite; coverage 94% vs the 85% ADR-0008 gate) @ c359600 · format ✅ (ruff, whole tree) · security ⚠️ NOT RUN — no scanner is configured in this project (no bandit / semgrep / pip-audit in pyproject.toml, Makefile or ci.yml). This feature touches input parsing and writes externally-supplied bytes to disk, so a scan is warranted: flagged to \`role-system-architect\` for an ADR on the project's security-scanning tool.`
+
 - `W1 self-review @ 76deebd — 2 files · 0 critical, 0 important, 1 suggestion (chmod applied after write_bytes; brief default-perm window)`
 - `W4 self-review @ 4a0f3c1 — 8 files · 0 critical, 0 important, 1 suggestion (rejected:unstorable maps to AC-8's reply text, per the design's error table — honest but slightly generic for a magic-byte rejection)`
 - `W3 self-review @ 5cf2a9c — 2 files · 0 critical, 1 important FOUND AND FIXED IN-WAVE (two AC-7/AC-8 assertions read lark's builder output, which test_stream_handler's sys.modules stub turns into a MagicMock — order-dependent; now spy on client.reply)`
