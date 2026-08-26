@@ -2,7 +2,7 @@
 
 > Owner: Planner → Dev (live updates) · Status: approved
 > Spec: `docs/sdlc/specs/messaging/image-input.md` · Spec version targeted: `h1:b82962101050`
-> Design: `docs/sdlc/designs/messaging/image-input.md` · Design version targeted: `h1:3cb3e392ea6d`
+> Design: `docs/sdlc/designs/messaging/image-input.md` · Design version targeted: `h1:b506e9264aab`
 
 ## Approach  <!-- Context -->
 
@@ -127,3 +127,5 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 - `W2 self-review @ 8e43f60 — 6 files · 1 important FOUND AND FIXED IN-WAVE (test_stream_handler's lark stub broke on T2's new imports), 0 critical, 0 suggestions`
 
 ## Revisions  <!-- History -->
+
+- `2026-08-26 — design update: download_resource returns a reason alongside the bytes so AC-7 and AC-8 stay distinguishable; no task or AC impact.`
