@@ -45,8 +45,15 @@ class HRBot:
             print("\nShutting down...")
 
     def _on_message(
-        self, chat_id: str, sender_id: str, sender_name: str, text: str, message_id: str
+        self,
+        chat_id: str,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        message_id: str,
+        _attachments: list | None = None,
     ):
+        """The HR bot has no use for images; it accepts and ignores them."""
         print(f"\n[Message] {sender_id[:8]}...: {text}")
 
         if text.strip().lower() in ("help", "/help", "hi", "hello"):

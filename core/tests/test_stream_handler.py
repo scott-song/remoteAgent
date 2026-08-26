@@ -13,8 +13,12 @@ _lark_api = types.ModuleType("lark_oapi.api")
 _lark_im = types.ModuleType("lark_oapi.api.im")
 _lark_im_v1 = types.ModuleType("lark_oapi.api.im.v1")
 for _attr in (
+    "CreateMessageReactionRequest",
+    "CreateMessageReactionRequestBody",
     "CreateMessageRequest",
     "CreateMessageRequestBody",
+    "Emoji",
+    "GetMessageResourceRequest",
     "PatchMessageRequest",
     "PatchMessageRequestBody",
     "ReplyMessageRequest",

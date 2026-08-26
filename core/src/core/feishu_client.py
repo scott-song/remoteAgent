@@ -16,14 +16,26 @@ from typing import Any, Callable, Optional
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    Emoji,
+    GetMessageResourceRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
 
+from .attachments import (
+    ACCEPTED_MSG_TYPES,
+    ACK_EMOJI,
+    IMAGE_MAX_BYTES,
+    MAX_ATTACHMENTS,
+    Attachment,
+    attachment_store,
+)
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +67,42 @@ def build_action_buttons(has_code_changes: bool = True) -> str:
         )
     buttons.append("📝 `/continue`")
     return "  ".join(buttons)
+
+
+# Feishu message-content shapes: an `image` message carries one key; a `post`
+# carries rich-text rows mixing text and `img` elements.
+_ATTACHMENT_ERRORS = {
+    "too_large": "⚠️ That image is over the 10 MB limit and was not attached.",
+    "failed": "⚠️ Could not download that image from Feishu. Try sending it again.",
+}
+
+
+def _extract_text(msg_type: str, content: dict) -> str:
+    """Pull the user's words out of a message body."""
+    if msg_type == "post":
+        parts = [
+            element.get("text", "")
+            for row in content.get("content", [])
+            for element in row
+            if element.get("tag") == "text"
+        ]
+        return " ".join(p for p in parts if p).strip()
+    return str(content.get("text", "")).strip()
+
+
+def _extract_image_keys(msg_type: str, content: dict) -> list[str]:
+    """Every image key in the message, in document order."""
+    if msg_type == "image":
+        key = content.get("image_key")
+        return [key] if key else []
+    if msg_type == "post":
+        return [
+            element["image_key"]
+            for row in content.get("content", [])
+            for element in row
+            if element.get("tag") == "img" and element.get("image_key")
+        ]
+    return []
 
 
 class FeishuClient:
@@ -91,8 +139,15 @@ class FeishuClient:
         # Event loop for async work
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
+        # Attachment holds; swappable for tests
+        self.attachments = attachment_store
+
     def on_message(self, callback: Callable):
-        """Register callback: callback(chat_id, sender_id, sender_name, text, message_id)"""
+        """Register callback.
+
+        callback(chat_id, sender_id, sender_name, text, message_id, attachments)
+        where attachments is a list[Attachment] — empty for a plain text message.
+        """
         self._on_message_callback = callback
 
     def start(self, loop: asyncio.AbstractEventLoop):
@@ -141,12 +196,18 @@ class FeishuClient:
         return thread
 
     def _on_event(self, data: Any) -> None:
-        """Handle incoming message event from Feishu."""
+        """Handle incoming message event from Feishu.
+
+        Runs on the lark WebSocket callback thread, which delivers events for
+        every chat — so anything slow (a resource download) is offloaded to the
+        bot's loop and this returns immediately.
+        """
         try:
             message = data.event.message
             sender = data.event.sender
 
-            # Dedup
+            # Dedup — upstream of any download, so a redelivered event neither
+            # re-downloads nor re-reacts.
             message_id = message.message_id
             if message_id in self._seen_ids:
                 return
@@ -154,33 +215,118 @@ class FeishuClient:
             while len(self._seen_ids) > self._seen_max:
                 self._seen_ids.popitem(last=False)
 
-            # Only text messages
-            if message.message_type != "text":
+            msg_type = message.message_type
+            if msg_type != "text" and msg_type not in ACCEPTED_MSG_TYPES:
                 return
 
-            # Extract sender info
             sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
+            chat_id = message.chat_id
+            sender_name = sender_id  # Feishu doesn't give username in the event easily
 
-            # Parse text and remove @mention
             content = json.loads(message.content)
-            text = content.get("text", "").strip()
+            text = _extract_text(msg_type, content)
             if hasattr(message, "mentions") and message.mentions:
                 for mention in message.mentions:
                     text = text.replace(mention.key, "").strip()
 
-            if not text:
+            image_keys = _extract_image_keys(msg_type, content)
+            if image_keys:
+                if self._loop is None:
+                    logger.error("[Feishu] No loop available — cannot fetch attachment")
+                    self.reply(message_id, _ATTACHMENT_ERRORS["failed"])
+                    return
+                logger.info(
+                    f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: "
+                    f"{len(image_keys)} image(s) + {len(text)} chars"
+                )
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_attachments(data, chat_id, sender_id, sender_name, text),
+                    self._loop,
+                )
                 return
 
-            chat_id = message.chat_id
-            sender_name = sender_id  # Feishu doesn't give username in the event easily
+            if not text:
+                return
 
             logger.info(f"[Feishu] {sender_id[:8]}... in {chat_id[:8]}...: {text}")
 
             if self._on_message_callback:
-                self._on_message_callback(chat_id, sender_id, sender_name, text, message_id)
+                self._on_message_callback(chat_id, sender_id, sender_name, text, message_id, [])
 
         except Exception as e:
             logger.error(f"[Feishu] Error handling message: {e}", exc_info=True)
+
+    async def _handle_attachments(
+        self, data: Any, chat_id: str, sender_id: str, sender_name: str, text: str
+    ) -> None:
+        """Download, hold and acknowledge a message's images.
+
+        Runs on the bot's loop; each blocking download goes to a worker thread so
+        neither the WebSocket thread nor the loop stalls (NFR-1).
+        """
+        started = time.time()
+        message = data.event.message
+        message_id = message.message_id
+        content = json.loads(message.content)
+
+        # Cap downloads per message, not just per prompt: a post can embed
+        # arbitrarily many images, and the cap must bound transfer.
+        keys = _extract_image_keys(message.message_type, content)[:MAX_ATTACHMENTS]
+
+        loop = asyncio.get_running_loop()
+        attachments: list[Attachment] = []
+        failures: list[str] = []
+
+        for key in keys:
+            try:
+                payload, reason = await loop.run_in_executor(
+                    None, self.download_resource, message_id, key
+                )
+            except Exception as e:
+                logger.error(f"[Feishu] Attachment fetch raised for {key[:8]}...: {e}")
+                self._log_receipt("rejected:error", sender_id, chat_id, 0, message_id)
+                failures.append("failed")
+                continue
+
+            if payload is None:
+                self._log_receipt(
+                    f"rejected:{reason or 'failed'}", sender_id, chat_id, 0, message_id
+                )
+                failures.append(reason or "failed")
+                continue
+
+            attachment = self.attachments.put(sender_id, chat_id, payload)
+            if attachment is None:
+                self._log_receipt(
+                    "rejected:unstorable", sender_id, chat_id, len(payload), message_id
+                )
+                failures.append("failed")
+                continue
+
+            self._log_receipt("accepted", sender_id, chat_id, attachment.size, message_id)
+            attachments.append(attachment)
+
+        # One reply per distinct cause, so five bad images are not five replies.
+        for reason in dict.fromkeys(failures):
+            self.reply(message_id, _ATTACHMENT_ERRORS.get(reason, _ATTACHMENT_ERRORS["failed"]))
+
+        if not attachments and not text:
+            return
+
+        if not text:
+            # A bare image is acknowledged with a reaction and starts no turn.
+            if self.react(message_id):
+                elapsed_ms = int((time.time() - started) * 1000)
+                logger.info(
+                    f"[Feishu] attachment ack sent ack_ms={elapsed_ms} msg={message_id} "
+                    "(budget 5000ms)"
+                )
+            return
+
+        if self._on_message_callback:
+            self._on_message_callback(
+                chat_id, sender_id, sender_name, text, message_id, attachments
+            )
 
     # ── Send / Update Messages ────────────────────────────
 
@@ -361,3 +507,89 @@ class FeishuClient:
             )
             if attempt < UPDATE_MAX_RETRIES:
                 time.sleep(UPDATE_RETRY_DELAY)
+
+    # ── Attachments ───────────────────────────────────────
+
+    def download_resource(
+        self, message_id: str, file_key: str, *, max_bytes: int = IMAGE_MAX_BYTES
+    ) -> tuple[bytes | None, str | None]:
+        """Fetch a message resource's bytes.
+
+        Returns ``(data, None)`` on success, else ``(None, reason)`` where reason
+        is ``"too_large"`` (AC-7) or ``"failed"`` (AC-8) — the two cases carry
+        different user-facing replies, so they must stay distinguishable.
+
+        Reads at most ``max_bytes + 1`` so an oversized resource is rejected
+        without ever being fully buffered.
+        """
+        request = (
+            GetMessageResourceRequest.builder()
+            .message_id(message_id)
+            .file_key(file_key)
+            .type("image")
+            .build()
+        )
+        response = None
+        for attempt in range(1 + UPDATE_MAX_RETRIES):
+            response = self.lark_client.im.v1.message_resource.get(request)
+            if response.success():
+                break
+            logger.warning(
+                f"[Feishu] Resource fetch failed (attempt {attempt + 1}): "
+                f"{response.code} - {response.msg}"
+            )
+            if attempt < UPDATE_MAX_RETRIES:
+                time.sleep(UPDATE_RETRY_DELAY)
+
+        if not (response and response.success()):
+            return None, "failed"
+
+        stream = getattr(response, "file", None)
+        if stream is None:
+            logger.warning(f"[Feishu] Resource {file_key[:8]}... returned no stream")
+            return None, "failed"
+
+        data = stream.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            logger.warning(
+                f"[Feishu] Resource {file_key[:8]}... exceeds {max_bytes} bytes — rejected"
+            )
+            return None, "too_large"
+        return data, None
+
+    @staticmethod
+    def _log_receipt(
+        disposition: str, sender_id: str, chat_id: str, size: int, message_id: str
+    ) -> None:
+        """One line per accepted or rejected attachment (AC-14).
+
+        Carries the disposition, sender, chat and size — never the bytes, and
+        never a path to a copy kept only for logging (BR-7).
+        """
+        logger.info(
+            f"[Feishu] attachment {disposition} sender={sender_id[:8]} "
+            f"chat={chat_id[:8]} size={size} msg={message_id}"
+        )
+
+    def react(self, message_id: str, emoji_type: str = ACK_EMOJI) -> bool:
+        """Add one emoji reaction to a message.
+
+        Returns False on failure and **never** falls back to a reply: AC-3
+        acknowledges receipt without adding a chat message, so a failed
+        acknowledgement stays in the log.
+        """
+        request = (
+            CreateMessageReactionRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+                .build()
+            )
+            .build()
+        )
+        response = self.lark_client.im.v1.message_reaction.create(request)
+        if response.success():
+            return True
+        logger.warning(f"[Feishu] Reaction failed: {response.code} - {response.msg}")
+        return False

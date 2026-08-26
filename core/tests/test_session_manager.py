@@ -294,3 +294,68 @@ class TestLoadHistory:
         monkeypatch.setattr(session_manager, "HISTORY_FILE", hist_file)
         mgr = SessionManager()
         assert mgr._history == {}
+
+
+# ---------------------------------------------------------------------------
+# Attachment cleanup  (T6 — AC-13)
+# ---------------------------------------------------------------------------
+
+
+class TestAttachmentPurgeOnClose:
+    async def test_int_AC_13_closing_a_session_purges_its_attachments(self):
+        """Given a session that used received images, when that session ends, then
+        every image received for it is deleted from the host."""
+        manager = SessionManager()
+        session = _make_session(user_id="u1", bot_name="proj", chat_id="c1")
+        manager.store(session)
+
+        with patch("core.session_manager.attachment_store") as store:
+            store.purge.return_value = 2
+            await manager.close("u1", "proj", "c1")
+
+        store.purge.assert_called_once_with("u1", "c1")
+
+    async def test_purge_is_keyed_by_sender_and_chat_not_by_project(self):
+        """The hold key is (sender, chat) while sessions are (user, project, chat)
+        — cleanup bridges the two, so the project never reaches purge."""
+        manager = SessionManager()
+        manager.store(_make_session(user_id="u1", bot_name="proj", chat_id="c1"))
+
+        with patch("core.session_manager.attachment_store") as store:
+            await manager.close("u1", "proj", "c1")
+
+        args, _ = store.purge.call_args
+        assert args == ("u1", "c1")
+        assert "proj" not in args
+
+    async def test_reset_via_close_purges_even_with_no_live_session(self):
+        """`/new` routes through close() even when no session exists; attachments
+        must still go, or a reset would carry stale images into the next session."""
+        manager = SessionManager()
+
+        with patch("core.session_manager.attachment_store") as store:
+            await manager.close("u1", "proj", "c1")
+
+        store.purge.assert_called_once_with("u1", "c1")
+
+    async def test_stale_cleanup_purges_each_stale_session(self):
+        """cleanup_stale closes each stale session, so the purge rides along."""
+        manager = SessionManager()
+        stale = _make_session(user_id="u1", bot_name="proj", chat_id="c1")
+        stale.last_active = 0.0
+        manager.store(stale)
+
+        with patch("core.session_manager.attachment_store") as store:
+            await manager.cleanup_stale()
+
+        store.purge.assert_called_once_with("u1", "c1")
+
+    async def test_a_purge_failure_never_blocks_the_close(self):
+        manager = SessionManager()
+        manager.store(_make_session(user_id="u1", bot_name="proj", chat_id="c1"))
+
+        with patch("core.session_manager.attachment_store") as store:
+            store.purge.side_effect = OSError("disk gone")
+            await manager.close("u1", "proj", "c1")
+
+        assert manager.get("u1", "proj", "c1") is None

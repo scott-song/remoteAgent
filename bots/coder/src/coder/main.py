@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 
+from core.attachments import Attachment, attachment_store
 from core.config import core_settings
 from core.feishu_client import FeishuClient, build_action_buttons
 from core.logging_config import get_logger, setup_logging
@@ -70,17 +71,52 @@ class ClaudeWorkspaceBot(CommandsMixin):
     # ── Message routing ──────────────────────────────────
 
     def _on_message(
-        self, chat_id: str, sender_id: str, _sender_name: str, text: str, message_id: str
+        self,
+        chat_id: str,
+        sender_id: str,
+        _sender_name: str,
+        text: str,
+        message_id: str,
+        attachments: list[Attachment] | None = None,
     ):
         logger.info(f"[Message] {sender_id[:8]}...: {text}")
 
+        inline = list(attachments or [])
+
         if text.startswith("/"):
             self._handle_command(text, chat_id, sender_id, message_id)
-        elif text.lower().strip() in _GREETINGS:
+            return
+        if text.lower().strip() in _GREETINGS:
             self.feishu.reply(message_id, HELP_TEXT)
-        else:
-            self.feishu.reply(message_id, self._prompt_ack(sender_id, chat_id))
-            self._schedule(self._handle_prompt(text, chat_id, sender_id, message_id))
+            return
+
+        # Drain anything this sender pasted earlier in this chat, plus whatever
+        # arrived inline on this message. take() releases the hold, so a later
+        # message never re-attaches the same image.
+        held, warnings = attachment_store.take(sender_id, chat_id)
+        images = held + inline
+
+        self.feishu.reply(
+            message_id,
+            self._prompt_ack(sender_id, chat_id, attachment_count=len(images), warnings=warnings),
+        )
+        self._schedule(
+            self._handle_prompt(self._compose_prompt(text, images), chat_id, sender_id, message_id)
+        )
+
+    def _compose_prompt(self, text: str, attachments: list[Attachment]) -> str:
+        """Reference each attachment by absolute path for the agent's Read tool.
+
+        With nothing attached the prompt is the user's text unchanged, so a
+        text-only conversation is byte-identical to before this feature.
+        """
+        if not attachments:
+            return text
+        lines = [text, ""]
+        lines += [f"Attached image: {a.path.resolve()}" for a in attachments]
+        lines.append("")
+        lines.append("Read the attached image file(s) above before answering.")
+        return "\n".join(lines)
 
     def _handle_command(self, text: str, chat_id: str, sender_id: str, message_id: str):
         parts = text.split(None, 2)
