@@ -86,13 +86,13 @@ land together in the same PR — see the risk register.
 
 ### T7 — Record every receipt and the acknowledgement latency
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T2, T3 — logs their dispositions
-- **Files**: `core/src/core/feishu_client.py`, `core/src/core/attachments.py`
+- **Files**: `core/src/core/feishu_client.py`, `core/tests/test_feishu_client.py`
 - **Design**: `§ Security → Audit logging` · `§ Performance → Observability`
 - **Covers**: AC-14 (full)
 - **Risk**: low
-- **Notes**: one INFO line per accepted or rejected receipt with disposition, truncated `sender_id`, truncated `chat_id`, byte size and `message_id` — and **never** the bytes or a path to a retained copy (BR-7). Add event-receipt → reaction-success elapsed ms to the same line, which is what makes the spec's 5-second budget checkable from logs with no new infrastructure. One line per purge sweep with a count. Use `core.logging_config.get_logger`, never `print()`.
+- **Notes**: `red: 3 tests failed — no audit line, no ack_ms` (a fourth, the no-bytes assertion, passed before implementation because nothing logged the payload; kept as a regression guard). `attachments.py` needed no change — the purge-count line landed with T6 — so this task's files are narrower than planned. one INFO line per accepted or rejected receipt with disposition, truncated `sender_id`, truncated `chat_id`, byte size and `message_id` — and **never** the bytes or a path to a retained copy (BR-7). Add event-receipt → reaction-success elapsed ms to the same line, which is what makes the spec's 5-second budget checkable from logs with no new infrastructure. One line per purge sweep with a count. Use `core.logging_config.get_logger`, never `print()`.
 
 ## Risk register  <!-- Context -->
 
@@ -120,6 +120,7 @@ deferred — eager reclamation and a per-project `accept_images` toggle — are 
 ## Build record  <!-- role-dev writes this during the build — empty at plan time -->
 
 - `W1 self-review @ 76deebd — 2 files · 0 critical, 0 important, 1 suggestion (chmod applied after write_bytes; brief default-perm window)`
+- `W4 self-review @ 4a0f3c1 — 8 files · 0 critical, 0 important, 1 suggestion (rejected:unstorable maps to AC-8's reply text, per the design's error table — honest but slightly generic for a magic-byte rejection)`
 - `W3 self-review @ 5cf2a9c — 2 files · 0 critical, 1 important FOUND AND FIXED IN-WAVE (two AC-7/AC-8 assertions read lark's builder output, which test_stream_handler's sys.modules stub turns into a MagicMock — order-dependent; now spy on client.reply)`
 - `W2 self-review @ 8e43f60 — 6 files · 1 important FOUND AND FIXED IN-WAVE (test_stream_handler's lark stub broke on T2's new imports), 0 critical, 0 suggestions`
 

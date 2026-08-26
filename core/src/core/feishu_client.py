@@ -264,6 +264,7 @@ class FeishuClient:
         Runs on the bot's loop; each blocking download goes to a worker thread so
         neither the WebSocket thread nor the loop stalls (NFR-1).
         """
+        started = time.time()
         message = data.event.message
         message_id = message.message_id
         content = json.loads(message.content)
@@ -283,17 +284,26 @@ class FeishuClient:
                 )
             except Exception as e:
                 logger.error(f"[Feishu] Attachment fetch raised for {key[:8]}...: {e}")
+                self._log_receipt("rejected:error", sender_id, chat_id, 0, message_id)
                 failures.append("failed")
                 continue
 
             if payload is None:
+                self._log_receipt(
+                    f"rejected:{reason or 'failed'}", sender_id, chat_id, 0, message_id
+                )
                 failures.append(reason or "failed")
                 continue
 
             attachment = self.attachments.put(sender_id, chat_id, payload)
             if attachment is None:
+                self._log_receipt(
+                    "rejected:unstorable", sender_id, chat_id, len(payload), message_id
+                )
                 failures.append("failed")
                 continue
+
+            self._log_receipt("accepted", sender_id, chat_id, attachment.size, message_id)
             attachments.append(attachment)
 
         # One reply per distinct cause, so five bad images are not five replies.
@@ -305,7 +315,12 @@ class FeishuClient:
 
         if not text:
             # A bare image is acknowledged with a reaction and starts no turn.
-            self.react(message_id)
+            if self.react(message_id):
+                elapsed_ms = int((time.time() - started) * 1000)
+                logger.info(
+                    f"[Feishu] attachment ack sent ack_ms={elapsed_ms} msg={message_id} "
+                    "(budget 5000ms)"
+                )
             return
 
         if self._on_message_callback:
@@ -541,6 +556,20 @@ class FeishuClient:
             )
             return None, "too_large"
         return data, None
+
+    @staticmethod
+    def _log_receipt(
+        disposition: str, sender_id: str, chat_id: str, size: int, message_id: str
+    ) -> None:
+        """One line per accepted or rejected attachment (AC-14).
+
+        Carries the disposition, sender, chat and size — never the bytes, and
+        never a path to a copy kept only for logging (BR-7).
+        """
+        logger.info(
+            f"[Feishu] attachment {disposition} sender={sender_id[:8]} "
+            f"chat={chat_id[:8]} size={size} msg={message_id}"
+        )
 
     def react(self, message_id: str, emoji_type: str = ACK_EMOJI) -> bool:
         """Add one emoji reaction to a message.

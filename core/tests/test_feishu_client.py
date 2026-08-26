@@ -878,3 +878,72 @@ class TestHandleAttachments:
 
         assert cb.call_count == 1
         assert len(cb.call_args[0][5]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Receipt audit log  (T7 — AC-14)
+# ---------------------------------------------------------------------------
+
+
+class TestReceiptAudit:
+    def _client(self, tmp_path, download=(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24, None)):
+        from core.attachments import AttachmentStore
+
+        client = _make_client()
+        client.download_resource = MagicMock(return_value=download)
+        client.react = MagicMock(return_value=True)
+        client.reply = MagicMock()
+        client.attachments = AttachmentStore(root=tmp_path)
+        return client
+
+    async def test_int_AC_14_an_accepted_receipt_is_recorded(self, tmp_path, caplog):
+        """Given default-level logging, when the bot accepts an image, then the log
+        records the disposition, the sender, the chat and the size."""
+        client = self._client(tmp_path)
+        client.on_message(MagicMock())
+
+        with caplog.at_level(logging.INFO):
+            await client._handle_attachments(
+                _image_event(), "chat_001", "user_001", "user_001", "look"
+            )
+
+        line = next(r for r in caplog.records if "attachment" in r.message.lower())
+        assert "accepted" in line.message
+        assert "user_001"[:8] in line.message
+        assert "chat_001"[:8] in line.message
+        assert "32" in line.message  # byte size
+
+    async def test_int_AC_14_a_rejected_receipt_records_why(self, tmp_path, caplog):
+        client = self._client(tmp_path, download=(None, "too_large"))
+        client.on_message(MagicMock())
+
+        with caplog.at_level(logging.INFO):
+            await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        text = caplog.text
+        assert "rejected" in text
+        assert "too_large" in text
+
+    async def test_int_AC_14_the_log_never_carries_the_bytes(self, tmp_path, caplog):
+        """BR-7 — the log records that an image arrived, never its content."""
+        secret = b"\x89PNG\r\n\x1a\nSECRETPIXELDATA"
+        client = self._client(tmp_path, download=(secret, None))
+        client.on_message(MagicMock())
+
+        with caplog.at_level(logging.DEBUG):
+            await client._handle_attachments(
+                _image_event(), "chat_001", "user_001", "user_001", "look"
+            )
+
+        assert "SECRETPIXELDATA" not in caplog.text
+
+    async def test_acknowledgement_latency_is_recorded(self, tmp_path, caplog):
+        """The 5-second budget is checkable from logs with no new infrastructure
+        (design § Performance → Observability)."""
+        client = self._client(tmp_path)
+        client.on_message(MagicMock())
+
+        with caplog.at_level(logging.INFO):
+            await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
+
+        assert "ack_ms=" in caplog.text
