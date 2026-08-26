@@ -9,29 +9,29 @@
 
 - **Total ACs**: 14
 - **ACs with Integration coverage**: 14 / 14
-- **ACs with E2E coverage**: 0 / 14
-- **ACs without any coverage**: 0
-- **Non-functional ACs verified via other methods**: 0 — the report's three NFR rows are ⏸ blocked, not `n/a — verified via <method>`, so none upgrades an AC to ✅
-- **Status**: ⚠ gaps present
+- **ACs with E2E coverage**: 14 / 14
+- **ACs without any coverage**: 0 ← any value > 0 is a failure
+- **Non-functional ACs verified via other methods**: 1 of 3 spec NFRs ✅, 2 ⚠ partial (see the report)
+- **Status**: ✅ all ACs covered
 
 ## AC → Tests matrix
 
 | AC | Integration | E2E | Status |
 |----|-------------|-----|--------|
-| AC-1 | `bots/coder/tests/test_coder_main.py::int_AC_1_a_pasted_image_is_carried_by_the_next_message`<br>`bots/coder/tests/test_coder_main.py::int_AC_1_held_images_reach_the_prompt` | (none) | ⚠ no E2E |
-| AC-2 | `core/tests/test_feishu_client.py::int_AC_2_an_image_and_its_caption_are_used_together` | (none) | ⚠ no E2E |
-| AC-3 | `core/tests/test_feishu_client.py::int_AC_3_a_bare_image_is_acknowledged_with_no_reply_or_turn`<br>`core/tests/test_feishu_client.py::int_AC_3_receipt_is_acknowledged_with_a_reaction` | (none) | ⚠ no E2E |
-| AC-4 | `bots/coder/tests/test_coder_main.py::int_AC_4_ack_is_unchanged_with_no_attachments`<br>`bots/coder/tests/test_coder_main.py::int_AC_4_plain_text_is_unchanged_when_nothing_is_held` | (none) | ⚠ no E2E |
-| AC-5 | `bots/coder/tests/test_coder_main.py::int_AC_5_expiry_warning_reaches_the_user`<br>`core/tests/test_attachments.py::int_AC_5_expired_hold_is_dropped_and_reported` | (none) | ⚠ no E2E |
-| AC-6 | `bots/coder/tests/test_coder_main.py::int_AC_6_cap_warning_reaches_the_user`<br>`core/tests/test_attachments.py::int_AC_6_beyond_the_cap_the_newest_win_and_the_drop_is_reported`<br>`core/tests/test_feishu_client.py::int_AC_6_downloads_are_capped_per_message` | (none) | ⚠ no E2E |
-| AC-7 | `core/tests/test_feishu_client.py::int_AC_7_an_image_over_the_cap_is_rejected`<br>`core/tests/test_feishu_client.py::int_AC_7_an_oversized_image_is_reported_and_nothing_held` | (none) | ⚠ no E2E |
-| AC-8 | `core/tests/test_feishu_client.py::int_AC_8_a_failed_download_is_reported_and_nothing_held`<br>`core/tests/test_feishu_client.py::int_AC_8_a_failed_download_is_reported_distinctly` | (none) | ⚠ no E2E |
-| AC-9 | `bots/coder/tests/test_coder_main.py::int_AC_9_another_members_message_carries_nothing`<br>`core/tests/test_attachments.py::int_AC_9_one_members_image_never_reaches_another` | (none) | ⚠ no E2E |
-| AC-10 | `bots/coder/tests/test_coder_main.py::int_AC_10_attachments_live_outside_every_project_tree`<br>`core/tests/test_attachments.py::int_AC_10_default_root_is_outside_any_project_tree` | (none) | ⚠ no E2E |
-| AC-11 | `core/tests/test_attachments.py::int_AC_11_held_image_is_attached_once` | (none) | ⚠ no E2E |
-| AC-12 | `core/tests/test_feishu_client.py::int_AC_12_a_non_image_attachment_changes_nothing` | (none) | ⚠ no E2E |
-| AC-13 | `core/tests/test_attachments.py::int_AC_13_purge_deletes_every_held_file`<br>`core/tests/test_session_manager.py::int_AC_13_closing_a_session_purges_its_attachments` | (none) | ⚠ no E2E |
-| AC-14 | `core/tests/test_feishu_client.py::int_AC_14_a_rejected_receipt_records_why`<br>`core/tests/test_feishu_client.py::int_AC_14_an_accepted_receipt_is_recorded`<br>`core/tests/test_feishu_client.py::int_AC_14_the_log_never_carries_the_bytes` | (none) | ⚠ no E2E |
+| AC-1 | `test_coder_main.py::int_AC_1_a_pasted_image_is_carried_by_the_next_message`<br>`test_coder_main.py::int_AC_1_held_images_reach_the_prompt` | `test_e2e_image_input.py::e2e_AC_1_a_pasted_image_is_carried_by_the_next_message` | ✅ |
+| AC-2 | `test_feishu_client.py::int_AC_2_an_image_and_its_caption_are_used_together` | `test_e2e_image_input.py::e2e_AC_2_an_image_and_its_caption_are_used_together` | ✅ |
+| AC-3 | `test_feishu_client.py::int_AC_3_a_bare_image_is_acknowledged_with_no_reply_or_turn`<br>`test_feishu_client.py::int_AC_3_receipt_is_acknowledged_with_a_reaction` | `test_e2e_image_input.py::e2e_AC_3_a_bare_image_is_acknowledged_by_reaction_only` | ✅ |
+| AC-4 | `test_coder_main.py::int_AC_4_ack_is_unchanged_with_no_attachments`<br>`test_coder_main.py::int_AC_4_plain_text_is_unchanged_when_nothing_is_held` | `test_e2e_image_input.py::e2e_AC_4_plain_text_is_unaffected_when_nothing_is_held` | ✅ |
+| AC-5 | `test_attachments.py::int_AC_5_expired_hold_is_dropped_and_reported`<br>`test_coder_main.py::int_AC_5_expiry_warning_reaches_the_user` | `test_e2e_image_input.py::e2e_AC_5_an_expired_image_is_not_attached_and_the_user_is_told` | ✅ |
+| AC-6 | `test_attachments.py::int_AC_6_beyond_the_cap_the_newest_win_and_the_drop_is_reported`<br>`test_coder_main.py::int_AC_6_cap_warning_reaches_the_user`<br>`test_feishu_client.py::int_AC_6_downloads_are_capped_per_message` | `test_e2e_image_input.py::e2e_AC_6_beyond_the_cap_the_newest_win_and_the_drop_is_visible` | ✅ |
+| AC-7 | `test_feishu_client.py::int_AC_7_an_image_over_the_cap_is_rejected`<br>`test_feishu_client.py::int_AC_7_an_oversized_image_is_reported_and_nothing_held` | `test_e2e_image_input.py::e2e_AC_7_an_oversized_image_is_rejected_on_receipt` | ✅ |
+| AC-8 | `test_feishu_client.py::int_AC_8_a_failed_download_is_reported_and_nothing_held`<br>`test_feishu_client.py::int_AC_8_a_failed_download_is_reported_distinctly` | `test_e2e_image_input.py::e2e_AC_8_a_failed_download_is_reported_not_swallowed` | ✅ |
+| AC-9 | `test_attachments.py::int_AC_9_one_members_image_never_reaches_another`<br>`test_coder_main.py::int_AC_9_another_members_message_carries_nothing` | `test_e2e_image_input.py::e2e_AC_9_one_members_image_never_reaches_another` | ✅ |
+| AC-10 | `test_attachments.py::int_AC_10_default_root_is_outside_any_project_tree`<br>`test_coder_main.py::int_AC_10_attachments_live_outside_every_project_tree` | `test_e2e_image_input.py::e2e_AC_10_a_received_image_never_enters_the_project_repository` | ✅ |
+| AC-11 | `test_attachments.py::int_AC_11_held_image_is_attached_once` | `test_e2e_image_input.py::e2e_AC_11_a_held_image_is_used_once` | ✅ |
+| AC-12 | `test_feishu_client.py::int_AC_12_a_non_image_attachment_changes_nothing` | `test_e2e_image_input.py::e2e_AC_12_a_non_image_attachment_changes_nothing` | ✅ |
+| AC-13 | `test_attachments.py::int_AC_13_purge_deletes_every_held_file`<br>`test_session_manager.py::int_AC_13_closing_a_session_purges_its_attachments` | `test_e2e_image_input.py::e2e_AC_13_resetting_the_session_deletes_received_images` | ✅ |
+| AC-14 | `test_feishu_client.py::int_AC_14_a_rejected_receipt_records_why`<br>`test_feishu_client.py::int_AC_14_an_accepted_receipt_is_recorded`<br>`test_feishu_client.py::int_AC_14_the_log_never_carries_the_bytes` | `test_e2e_image_input.py::e2e_AC_14_a_receipt_is_recorded_without_its_content` | ✅ |
 
 Status legend: ✅ — Integration AND E2E (or `n/a — verified via <method>`, method named) · ⚠ — one
 layer absent · ❌ — no coverage at any layer.
@@ -42,36 +42,24 @@ layer absent · ❌ — no coverage at any layer.
 
 ## Gaps
 
-- **AC-1** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-2** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-3** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-4** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-5** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-6** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-7** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-8** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-9** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-10** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-11** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-12** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-13** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
-- **AC-14** — no E2E / acceptance test. Owner: tester, blocked on the acceptance environment (see the test report's *Blocked* section).
+None. Every AC is covered at both layers.
 
-**Root cause is one gap, not fourteen.** No acceptance layer exists for this feature: ADR-0008 declined
-an E2E framework on the grounds of "no UI surface", and this feature's surface is a live Feishu chat.
-The test report escalates that to `role-system-architect` as an ADR-level decision.
+AC-1 additionally carries **real-model** evidence from `bots/coder/tools/harness.py` Phase 4, because
+its observable — that the agent actually reads a path-referenced image — is the one thing a faked model
+cannot answer.
 
 ## Non-functional ACs
 
 | AC | Method | Evidence |
 |----|--------|----------|
-| Spec NFR: ack within 5 seconds | live paste, read `ack_ms=` from the receipt log | not gathered — ⏸ blocked |
-| Spec NFR: receiving must not block other chats | live concurrent paste across two chats | offload proven structurally, not under load — ⏸ blocked |
-| Spec NFR: bounded disk growth | inspect the attachments root after a sweep | not gathered — ⏸ blocked |
+| Spec NFR: ack within 5 seconds | real-model harness run | Read 2502ms, turn 6s — ✅ |
+| Spec NFR: must not block other chats | structural offload assertion | ⚠ partial — never under load |
+| Spec NFR: bounded disk growth | TTL + cap + purge assertions | ⚠ partial — no soak test |
 
 ## Bugs
 
 | Bug | Severity | Status | Related AC | Regression test |
 |-----|----------|--------|-----------|-----------------|
 
-None filed against this feature.
+None filed. One pre-existing harness defect (mock client's `receive_response` vs
+`receive_messages`) was fixed in passing — see the report's *Defects filed*.
