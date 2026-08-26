@@ -37,16 +37,42 @@ import asyncio
 import contextlib
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import textwrap
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 CHAT_A, CHAT_B, USER = "chatA", "chatB", "userA"
+
+
+def solid_png(width: int = 96, height: int = 96, rgb: tuple = (220, 20, 60)) -> bytes:
+    """A solid-colour RGB PNG, standard library only (no Pillow in this venv).
+
+    Crimson by default: a colour the model can name unambiguously, which is what
+    makes the image phase a real check rather than a vibe.
+    """
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + tag
+            + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
 
 
 # ── fake Feishu transport (the only mock that is always on) ─────────────────
@@ -128,8 +154,9 @@ class UserMessage:
 
 
 class SystemMessage:
-    def __init__(self, data):
+    def __init__(self, data, subtype=None):
         self.data = data
+        self.subtype = subtype
 
 
 class ResultMessage:
@@ -169,8 +196,12 @@ class FakeClaudeClient:
     async def query(self, text):
         self._last_query = text
 
-    async def receive_response(self):
-        yield SystemMessage({"session_id": self.session_id})
+    async def receive_messages(self):
+        # _stream_response consumes receive_messages(), not receive_response()
+        # (BUG-responds-to-previous-message). The init subtype is what lets a
+        # fresh session adopt this id, and the ResultMessage must carry the SAME
+        # id or the origin filter drops it and the turn never ends.
+        yield SystemMessage({"session_id": self.session_id}, subtype="init")
         yield AssistantMessage([ToolUseBlock("Write", {"file_path": "hello.txt"})])
         yield UserMessage([ToolResultBlock("wrote hello.txt")])
         yield AssistantMessage([TextBlock(f"(mock) handled: {self._last_query[:60]}")])
@@ -262,7 +293,22 @@ def run(mock_claude: bool, keep: bool) -> int:
 
         def say(chat_id: str, user_id: str, text: str):
             print(f"\n\033[1m👤 [{user_id}@{chat_id}] {text}\033[0m")
-            bot._on_message(chat_id, user_id, user_id, text, feishu._id())
+            bot._on_message(chat_id, user_id, user_id, text, feishu._id(), [])
+
+        def paste(chat_id: str, user_id: str, rgb: tuple = (220, 20, 60)) -> Any:
+            """Simulate pasting an image: hold it exactly as the transport would.
+
+            The transport itself (download + reaction) is covered by
+            bots/coder/tests/test_e2e_image_input.py, which drives the real
+            FeishuClient. Here the point is the *prompt*, so we hold the bytes
+            and let the bot drain them on the next message.
+            """
+            from core.attachments import attachment_store
+
+            att = attachment_store.put(user_id, chat_id, solid_png(rgb=rgb))
+            print(f"\n\033[1m👤 [{user_id}@{chat_id}] (pasted an image)\033[0m")
+            print(f"   🖼  held → {att.path if att else 'REJECTED'}")
+            return att
 
         mode = "MOCK Claude (deterministic)" if mock_claude else "REAL Claude (true E2E)"
         banner(f"coder-bot harness — Feishu faked, {mode}")
@@ -307,6 +353,32 @@ def run(mock_claude: bool, keep: bool) -> int:
         print("\nLive session keys (user:project:chat):")
         for s in bot.sessions.all_sessions():
             print(f"   • {s.key}")
+
+        # ── Phase 4: image input (messaging/image-input) ────────────────────
+        banner("PHASE 4 — image input: paste, then ask (AC-1's real observable)")
+        import core.attachments as _att_mod
+
+        _att_mod.attachment_store._root = base / "attachments"
+
+        before = len(feishu.updated)
+        paste(CHAT_A, USER)
+        say(
+            CHAT_A,
+            USER,
+            "What colour is the attached image? Reply with exactly one word.",
+        )
+        answer = " ".join(feishu.updated[before:]) + " " + " ".join(feishu.sent[before:])
+        saw_colour = any(w in answer.lower() for w in ("crimson", "red", "#dc143c", "dc143c"))
+        print(
+            f"\n   AC-1 probe — did the reply name the image's colour? "
+            f"{'YES ✅' if saw_colour else 'NO ❌'}" + ("" if mock_claude else "  (real model)")
+        )
+        if mock_claude:
+            print("   (mock mode: the canned client cannot look at an image — run without")
+            print("    --mock-claude for the real answer)")
+
+        banner("PHASE 4b — nothing held: the prompt must be untouched")
+        say(CHAT_A, USER, "Reply with just the word: plain")
 
         banner("SUMMARY")
         print(
