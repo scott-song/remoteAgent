@@ -10,7 +10,7 @@ from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from core.attachments import ACK_EMOJI
+from core.attachments import ACK_EMOJI, IMAGE_MAX_BYTES
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -814,7 +814,10 @@ class TestHandleAttachments:
         assert cb.call_count == 1
         args = cb.call_args[0]
         assert args[3] == "why is this misaligned?"
-        assert len(args[5]) == 1
+        # The image is held, not passed inline: one drain, no double-attach.
+        assert args[5] == []
+        held, _ = client.attachments.take("user_001", "chat_001")
+        assert len(held) == 1
         client.react.assert_not_called()
 
     async def test_int_AC_6_downloads_are_capped_per_message(self, tmp_path):
@@ -833,7 +836,7 @@ class TestHandleAttachments:
         assert client.download_resource.call_count == MAX_ATTACHMENTS
 
     async def test_int_AC_7_an_oversized_image_is_reported_and_nothing_held(self, tmp_path):
-        client = self._client(tmp_path, download=(None, "too_large", 11534336))
+        client = self._client(tmp_path, download=(None, "too_large", IMAGE_MAX_BYTES + 1))
         cb = MagicMock()
         client.on_message(cb)
         client.reply = MagicMock()
@@ -883,7 +886,9 @@ class TestHandleAttachments:
         )
 
         assert cb.call_count == 1
-        assert len(cb.call_args[0][5]) == 1
+        assert cb.call_args[0][5] == []
+        held, _ = client.attachments.take("user_001", "chat_001")
+        assert len(held) == 1, "the one image that downloaded is held for the drain"
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +925,7 @@ class TestReceiptAudit:
         assert "size=32" in line.message  # F-3: exact, not a bare substring
 
     async def test_int_AC_14_a_rejected_receipt_records_why(self, tmp_path, caplog):
-        client = self._client(tmp_path, download=(None, "too_large", 11534336))
+        client = self._client(tmp_path, download=(None, "too_large", IMAGE_MAX_BYTES + 1))
         client.on_message(MagicMock())
 
         with caplog.at_level(logging.INFO):
@@ -1009,24 +1014,38 @@ class TestPasteThenTypeRace:
         )
 
     async def test_a_failed_receive_still_delivers_the_text(self):
+        """F-17: gated on an Event so the receive is provably still in flight when
+        the text arrives — otherwise the direct path is taken and the failure
+        branch never executes, and the test passes without asserting it."""
         client = _make_client()
         cb = MagicMock()
         client.on_message(cb)
         client._loop = asyncio.get_running_loop()
 
+        started = asyncio.Event()
+        release = asyncio.Event()
+
         async def boom(*_a, **_kw):
+            started.set()
+            await release.wait()
             raise RuntimeError("download exploded")
 
         client._handle_attachments = boom
         client._on_event(_image_event())
-        await asyncio.sleep(0)
+        await started.wait()
+
         client._on_event(_make_event(text="still mine", message_id="m_text"))
-        for _ in range(20):
+        await asyncio.sleep(0)
+        assert cb.call_count == 0, "the text must be waiting on the in-flight receive"
+
+        release.set()
+        for _ in range(30):
             await asyncio.sleep(0)
             if cb.call_count:
                 break
 
         assert cb.call_count == 1
+        assert cb.call_args[0][3] == "still mine"
 
 
 class TestReactRetry:
@@ -1069,14 +1088,17 @@ class TestRejectionSize:
         client = _make_client()
         client.attachments = AttachmentStore(root=tmp_path)
         client.reply = MagicMock()
-        client.download_resource = MagicMock(return_value=(None, "too_large", 11534336))
+        client.download_resource = MagicMock(return_value=(None, "too_large", IMAGE_MAX_BYTES + 1))
         client.on_message(MagicMock())
 
         with caplog.at_level(logging.INFO):
             await client._handle_attachments(_image_event(), "chat_001", "user_001", "user_001", "")
 
         assert "rejected:too_large" in caplog.text
-        assert "size=11534336" in caplog.text
+        # F-15: the read stops at max_bytes + 1, so the size is a floor, not a
+        # figure — the log must not present a bound as an exact size.
+        assert f"size>={IMAGE_MAX_BYTES + 1}" in caplog.text
+        assert f"size={IMAGE_MAX_BYTES + 1}" not in caplog.text
 
 
 class TestAttachmentOptIn:
@@ -1116,3 +1138,150 @@ class TestAttachmentOptIn:
 
         with patch("core.feishu_client.lark"):
             assert FeishuClient("a", "b").accept_attachments is False
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 fixes (F-13, F-14)
+# ---------------------------------------------------------------------------
+
+
+class TestReceivesSerializePerSender:
+    """F-13 — two receives from one sender must not settle out of order."""
+
+    async def test_int_AC_2_a_captioned_post_waits_for_an_earlier_paste(self, tmp_path):
+        """Given a bare image still downloading, when a captioned post arrives,
+        then the post's turn carries BOTH images — plan T5 promises that flow."""
+        from core.attachments import AttachmentStore
+
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+        client.attachments = AttachmentStore(root=tmp_path)
+        client.react = MagicMock(return_value=True)
+        client.reply = MagicMock()
+
+        slow = asyncio.Event()
+        order: list[str] = []
+
+        def download(_mid, key, **_kw):
+            order.append(key)
+            return b"\x89PNG\r\n\x1a\n", None, 8
+
+        client.download_resource = MagicMock(side_effect=download)
+
+        # The bare paste starts first and is held up mid-flight.
+        real_receive = client._receive_attachments
+
+        async def gated(*a, **kw):
+            if not slow.is_set():
+                await slow.wait()
+            return await real_receive(*a, **kw)
+
+        client._receive_attachments = gated
+
+        client._on_event(_image_event(message_id="m_paste"))
+        await asyncio.sleep(0)
+        client._on_event(_post_event(text="and this one", message_id="m_post"))
+        await asyncio.sleep(0)
+
+        slow.set()
+        for _ in range(60):
+            await asyncio.sleep(0)
+            if cb.call_count:
+                break
+
+        assert cb.call_count == 1, "the post should deliver exactly one turn"
+        assert len(order) == 2, "both images should have been fetched"
+        # Both are held by the time the post's turn is delivered, so the bot's
+        # single drain attaches both — which is what plan T5 promises.
+        held, _ = client.attachments.take("user_001", "chat_001")
+        assert cb.call_args[0][5] == []
+        assert len(held) == 2
+
+
+class TestDeliveryGrace:
+    """F-14 — the wait is bounded; silence is worse than a missing image."""
+
+    async def test_a_stuck_receive_does_not_hold_the_text_forever(self, monkeypatch):
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+        monkeypatch.setattr("core.feishu_client.DELIVERY_GRACE_SECONDS", 0.05)
+
+        stuck = asyncio.Event()
+
+        async def never_finishes(*_a, **_kw):
+            await stuck.wait()
+
+        client._handle_attachments = never_finishes
+        client._on_event(_image_event())
+        await asyncio.sleep(0)
+
+        client._on_event(_make_event(text="anyone there?", message_id="m_text"))
+        await asyncio.sleep(0.2)
+
+        assert cb.call_count == 1, "the text must go through rather than leaving silence"
+        assert cb.call_args[0][3] == "anyone there?"
+        assert cb.call_args[0][5] == []
+        stuck.set()
+
+    async def test_the_grace_window_is_not_spent_when_the_receive_is_quick(self):
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async def quick(*_a, **_kw):
+            started.set()
+            await release.wait()
+
+        client._handle_attachments = quick
+        client._on_event(_image_event())
+        await started.wait()
+        client._on_event(_make_event(text="ready", message_id="m_text"))
+        await asyncio.sleep(0)
+        assert cb.call_count == 0
+
+        release.set()
+        for _ in range(30):
+            await asyncio.sleep(0)
+            if cb.call_count:
+                break
+        assert cb.call_count == 1
+
+    async def test_waits_run_concurrently_not_in_series(self, monkeypatch):
+        """Six pasted images are six jobs; awaiting them in series multiplied the
+        worst case by six (F-14)."""
+        client = _make_client()
+        cb = MagicMock()
+        client.on_message(cb)
+        client._loop = asyncio.get_running_loop()
+        monkeypatch.setattr("core.feishu_client.DELIVERY_GRACE_SECONDS", 0.3)
+
+        stuck = asyncio.Event()
+
+        async def never(*_a, **_kw):
+            await stuck.wait()
+
+        client._handle_attachments = never
+        for i in range(6):
+            client._on_event(_image_event(message_id=f"m_{i}"))
+        await asyncio.sleep(0)
+
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        client._on_event(_make_event(text="hello?", message_id="m_text"))
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if cb.call_count:
+                break
+        elapsed = loop.time() - began
+
+        assert cb.call_count == 1
+        assert elapsed < 1.0, f"six jobs awaited in series would take ~1.8s, took {elapsed:.2f}s"
+        stuck.set()

@@ -453,3 +453,24 @@ class TestRepoIsolation:
         assert staged.strip() == "", f"nothing should be staged, got: {staged!r}"
         assert referenced.name not in staged
         assert not str(referenced).startswith(str(Path(project_dir).resolve()))
+
+
+class TestNoDoubleAttach:
+    async def test_e2e_AC_2_a_captioned_post_attaches_its_image_exactly_once(self, stack):
+        """Regression: the image was both held in the store and passed inline to
+        the callback, so `held + inline` attached it twice — double vision-token
+        cost, and two of the five cap slots for one image. Found by the round-2
+        F-13 test, missed by every earlier layer because they counted the
+        callback's argument rather than the prompt."""
+        await stack.deliver(post_event("look at this"))
+
+        assert FakeClaude.last_query.count("Attached image:") == 1
+
+    async def test_e2e_AC_6_a_post_and_a_paste_together_stay_within_the_cap(self, stack):
+        """Six real images across a paste and a captioned post must attach five,
+        not ten."""
+        for i in range(6):
+            await stack.deliver(image_event(message_id=f"m_pre_{i}"))
+        await stack.deliver(post_event("and these", message_id="m_post"))
+
+        assert FakeClaude.last_query.count("Attached image:") == 5

@@ -1,12 +1,12 @@
 # Test report: messaging/image-input
 
 > Owner: Tester
-> Code under test (commit SHA): 9e0ce9fcaae83d8f76feb21ebb96318942330378
+> Code under test (commit SHA): 94818ef6917df0af0e11551b1a329d2f94ce849a
 > Spec: `docs/sdlc/specs/messaging/image-input.md`
 > Design: `docs/sdlc/designs/messaging/image-input.md`
 > Plan: `docs/sdlc/plans/messaging/image-input.md`
 
-<!-- sdlc-anchors: spec=h1:b82962101050 design=h1:b506e9264aab plan=h1:da6f8a2cebf3 verified=2026-08-26 -->
+<!-- sdlc-anchors: spec=h1:b82962101050 design=h1:e0e0bba14e61 plan=h1:c0fabe866a63 verified=2026-08-26 -->
 
 ## Summary  <!-- Context -->
 
@@ -31,8 +31,8 @@ false premise.
 - **Data**: a real PNG generated in-test by a stdlib encoder (`solid_png`) — crimson `(220, 20, 60)`,
   chosen because a model can name it unambiguously.
 - **Runner concurrency**: 1 (pytest default; the e2e fixture owns a loop per test)
-- **Level 1 (this feature's E2E)**: **14 tests, 2.5s** — `bots/coder/tests/test_e2e_image_input.py`
-- **Level 2 (regression sweep)**: **full suite — 403 tests, 4.1s**, `EXIT=0`. Full rather than scoped
+- **Level 1 (this feature's E2E)**: **16 tests, 2.5s** — `bots/coder/tests/test_e2e_image_input.py`
+- **Level 2 (regression sweep)**: **full suite — 418 tests, 5.8s**, `EXIT=0`. Full rather than scoped
   because CI runs pytest only post-merge on this project, so the full sweep is the gate.
 
 **What is faked, and why that is the honest boundary.** Two seams: the lark SDK client (no network)
@@ -198,6 +198,32 @@ everything. The user-visible strings are asserted verbatim at both layers.
 - **Structural gap still standing**: ADR-0008 declined an E2E framework for "no UI surface". This pass
   shows an acceptance layer was buildable without one — but it is bespoke, and the ADR still describes
   a project with no such layer. Worth an ADR revision.
+
+## Re-verification after review rounds 1 and 2  <!-- Contract -->
+
+Re-run because the fix batches landed above the previous stamp, so the earlier evidence no longer
+covered the code (review F-18). Both levels re-executed at `94818ef`, the tree that contains every fix.
+
+| | Before | Now |
+|---|---|---|
+| Level 1 (e2e) | 14 tests | **16** — two added for the double-attach bug |
+| Level 2 (full sweep) | 403 | **418** |
+| Freshness chain | `plan→design` DRIFTED | **4/4 fresh** |
+
+**Two things the review rounds changed about this report's honesty.** First, AC-2 was passing while the
+implementation attached a captioned post's image **twice** — every layer asserted the callback's
+argument rather than the prompt, so nothing counted. `e2e_AC_2_a_captioned_post_attaches_its_image_exactly_once`
+now counts the prompt, and `e2e_AC_6_a_post_and_a_paste_together_stay_within_the_cap` pins the cap
+across both paths. Second, AC-1's round-1 fix introduced a way for a sender to receive **no reply at
+all** for minutes; that is now bounded and tested.
+
+Each round-2 fix was verified by disabling it and observing its own tests fail:
+
+| Fix disabled | Result |
+|---|---|
+| F-14's `timeout=DELIVERY_GRACE_SECONDS` → `None` | 2 failed |
+| F-13's per-key lock made per-call | 1 failed (`assert len(held) == 2`) |
+| the inline-attachment double-attach restored | 2 failed |
 
 ## Sign-off  <!-- Contract -->
 

@@ -52,7 +52,7 @@ cannot answer.
 
 | AC | Method | Evidence |
 |----|--------|----------|
-| Spec NFR: ack within 5 seconds | real-model harness run | Read 2502ms, turn 6s — ✅ |
+| Spec NFR: ack within 5 seconds | real-model harness run; plus `DELIVERY_GRACE_SECONDS` bounding the pre-drain wait at 3s | Read 2502ms, turn 6s — ✅ |
 | Spec NFR: must not block other chats | structural offload assertion | ⚠ partial — never under load |
 | Spec NFR: bounded disk growth | TTL + cap + purge assertions | ⚠ partial — no soak test |
 
