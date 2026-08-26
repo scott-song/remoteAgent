@@ -56,13 +56,13 @@ land together in the same PR — see the risk register.
 
 ### T4 — Update the HR bot for the widened callback
 
-- **Status**: `[ ]`
+- **Status**: `[x]`
 - **Depends**: T3 — consumes the new callback contract
-- **Files**: `bots/hr/src/hr/main.py`
+- **Files**: `bots/hr/src/hr/main.py`, `bots/hr/tests/test_hr_main.py`
 - **Design**: `§ Backend API → Consumers`
 - **Covers**: infrastructure (no AC) — backwards compatibility
 - **Risk**: low
-- **Notes**: accept and ignore the parameter as `_attachments`, exactly as `_sender_name` is already ignored. `bots/hr/tests/test_hr_main.py:20,29` call `_on_message` directly with five positional args and must be updated in this task, or the suite fails.
+- **Notes**: `red: 2 new tests failed — HRBot._on_message took 5 positional args`. The parameter is **defaulted** (`_attachments: list | None = None`) so an older caller is not broken, which also keeps this task independently revertible. accept and ignore the parameter as `_attachments`, exactly as `_sender_name` is already ignored. `bots/hr/tests/test_hr_main.py:20,29` call `_on_message` directly with five positional args and must be updated in this task, or the suite fails.
 
 ### T5 — Attach held images to the coder bot's prompts
 
